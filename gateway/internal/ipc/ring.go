@@ -63,7 +63,11 @@ func NewRingWriter(path string, numSlots int) (*RingWriter, error) {
 	// Read existing header to check if already initialized
 	hdr := make([]byte, headerSize)
 	if _, err := f.ReadAt(hdr, 0); err != nil {
-		// if read fails, treat as empty
+		// fresh file may be missing/empty → all-zero header → init below;
+		// any other read failure is a real I/O error
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
 	}
 	magic := binary.LittleEndian.Uint32(hdr[offMagic : offMagic+4])
 	ver := binary.LittleEndian.Uint16(hdr[offVersion : offVersion+2])
@@ -160,6 +164,7 @@ func (r *RingWriter) Write(typ byte, sagaID [16]byte, payload []byte) error {
 	var hb [8]byte
 	binary.LittleEndian.PutUint64(hb[:], newHead)
 	if _, err := r.file.WriteAt(hb[:], offHead); err != nil {
+		// ponytail: if head-persist fails after slot write, reader may consume an event the caller saw as failed; bounded by engine idempotency dedup
 		return err
 	}
 	return nil

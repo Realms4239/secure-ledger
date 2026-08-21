@@ -1,6 +1,7 @@
 package ipc
 
 import (
+	"bytes"
 	"os"
 	"testing"
 )
@@ -27,6 +28,25 @@ func TestRingWriter_WriteAndReadRaw(t *testing.T) {
 		t.Fatalf("raw read mismatch %v typ=%x id=%x", err, typ, gotID)
 	}
 	_ = payload
+	// second write + wrapped read exercise the mask (1024 & 1023 == 0)
+	if err := rw.Write(0x02, id, []byte(`{"x":2}`)); err != nil {
+		t.Fatal(err)
+	}
+	slot2, err := rw.ReadRaw(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typ2, _, payload2, err := UnmarshalSlot(slot2)
+	if err != nil || typ2 != 0x02 || string(payload2) != `{"x":2}` {
+		t.Fatalf("slot 1 mismatch %v typ=%x payload=%q", err, typ2, payload2)
+	}
+	wrapped, err := rw.ReadRaw(1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(wrapped, slot) {
+		t.Fatal("ReadRaw(1024) should alias slot 0 via mask")
+	}
 }
 
 func TestRingWriter_FullReturns503(t *testing.T) {

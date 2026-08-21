@@ -66,9 +66,6 @@ func UnmarshalSlot(slot []byte) (byte, [16]byte, []byte, error) {
 		return 0, [16]byte{}, nil, errors.New("ipc: payload_len too large")
 	}
 	// _pad at slot[30:32] ignored
-	if int(payloadLen) > SlotSize-32 {
-		return 0, [16]byte{}, nil, errors.New("ipc: payload_len exceeds slot")
-	}
 	// copy payload out so caller does not retain reference to slot
 	payload := make([]byte, payloadLen)
 	copy(payload, slot[32:32+payloadLen])

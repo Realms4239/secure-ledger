@@ -8,7 +8,7 @@ Ring: fixed 256B slots, SPSC, two padded u64 counters (head at 0 and tail at 64,
 
 ## 1. Ring header (file `/dev/shm/secureledger.ring`)
 
-File layout: `header (128 B padded) + numSlots * 256 B`.
+File layout: `header (256 B = one slot-sized, only first 144 B used) + numSlots * 256 B`.
 
 ```
 Offset  Size  Field       Description
@@ -23,7 +23,7 @@ Offset  Size  Field       Description
 144     112   _pad2       zero to 256 B boundary (header is one slot-sized for alignment simplicity, but only first 128 B used; alternative impls may use 128 B header)
 ```
 
-Capacity check: `capacity & (capacity - 1) == 0` else reject. Mask: `mask = capacity - 1`. Slot index: `idx = counter & mask`. Byte offset: `headerSize + idx * 256`.
+Capacity check: `capacity & (capacity - 1) == 0` else reject. Mask: `mask = capacity - 1`. Slot index: `idx = counter & mask`. Byte offset: `headerSize + idx * 256`. headerSize = 256 is normative; slot base = 256 + idx*256.
 
 Memory ordering: writer does `head.load(Acquire)` to check full, copies slot, then `head.fetch_add(1, Release)`. Reader does `tail.load(Acquire)` vs `head.load(Acquire)` to check empty, copies slot, then `tail.fetch_add(1, Release)`. SPSC only — single writer (gateway), single reader (engine).
 
