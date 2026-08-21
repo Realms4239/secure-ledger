@@ -1,0 +1,10 @@
+.worktrees/
+.superpowers/
+.env*
+*.key
+*.pem
+target/
+bin/
+dist/
+out/
+data/wal.log
