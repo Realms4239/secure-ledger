@@ -1,0 +1,14 @@
+syntax = "proto3";
+package secureledger.v1;
+option go_package = "secureledger/gateway/proto;ledgerpb";
+
+service Reconciliation {
+  rpc GetSagaStatus(GetSagaStatusRequest) returns (GetSagaStatusResponse);
+}
+message GetSagaStatusRequest { string saga_id = 1; }
+message GetSagaStatusResponse {
+  string saga_id = 1;
+  string state = 2; // InProgress | Compensating | Compensated | Duplicate
+  repeated string steps = 3;
+  string updated_at = 4;
+}

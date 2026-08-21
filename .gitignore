@@ -1,10 +1,18 @@
-.worktrees/
-.superpowers/
+# secrets
 .env*
 *.key
 *.pem
+# generated
 target/
 bin/
 dist/
 out/
+# Go
+gateway/vendor/
+# Rust
+engine/target/
+# data
 data/wal.log
+/dev/shm/secureledger.ring
+.worktrees/
+.superpowers/
