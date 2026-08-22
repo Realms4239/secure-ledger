@@ -75,20 +75,32 @@ Slot with:
 - type=0x01 SAGA_START
 - saga_id=550e8400-e29b-41d4-a716-446655440000
 - timestamp_ns=1700000000000000000
-- payload_len=0x0017 (23)
-- payload=`{"from":"alice","to":"bob","amount":100}` (23 B)
+- payload_len=40 (0x28)
+- payload=`{"from":"alice","to":"bob","amount":100}` (40 B)
 
 ```
-Fixture slot (hex, 32B header prefix):
+Fixture slot (256 B):
 type=0x01 SAGA_START, saga_id=550e8400-e29b-41d4-a716-446655440000,
-timestamp_ns=1700000000000000000, payload_len=0x0017,
+timestamp_ns=1700000000000000000, payload_len=40 (0x28),
 payload={"from":"alice","to":"bob","amount":100}
-Header hex: 01 00 00 00 55 0e 84 00 e2 9b 41 d4 a7 16 44 66 55 44 00 00 00 1d 1f 8b 7a 9d 8c 00 00 17 00
-Payload hex (23 B): 7b 22 66 72 6f 6d 22 3a 22 61 6c 69 63 65 22 2c 22 74 6f 22 3a 22 62 6f 62 22 2c 22 61 6d 6f 75 6e 74 22 3a 31 30 30 7d
-Full slot = header (32 B) + payload (23 B) + 201 B zero padding = 256 B
+
+Byte map (offsets per §2):
+  [0]      type        = 01
+  [1..2)   flags       = 00
+  [2..4)   reserved    = 00 00
+  [4..20)  saga_id     = 55 0e 84 00 e2 9b 41 d4 a7 16 44 66 55 44 00 00
+  [20..28) timestamp   = 00 00 2a 36 fe 9c 97 17   (1700000000000000000 LE)
+  [28..30) payload_len = 28 00                     (40 LE)
+  [30..32) _pad        = 00 00
+  [32..72) payload (40 B) = 7b 22 66 72 6f 6d 22 3a 22 61 6c 69 63 65 22 3a
+                            22 62 6f 62 22 2c 22 61 6d 6f 75 6e 74 22 3a
+                            31 30 30 7d
+  [72..256) zero padding (184 B)
+
+Full slot = 32 B header + 40 B payload + 184 B zero padding = 256 B
 ```
 
-Go `wire_test.go` and Rust `wire.rs` must parse this exact header prefix and round-trip the full 256 B slot. If this fixture fails, the wire contract is broken.
+Go `wire_test.go` and Rust `wire.rs` must parse this exact slot and round-trip the full 256 B. If this fixture fails, the wire contract is broken.
 
 ## 4. Versioning
 
