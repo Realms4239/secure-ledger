@@ -15,14 +15,8 @@ import (
 	"secureledger/gateway/internal/handler"
 	"secureledger/gateway/internal/idempotency"
 	"secureledger/gateway/internal/ipc"
+	"secureledger/gateway/internal/status"
 )
-
-// stubStatus satisfies handler.StatusClient until Task 7 wires the real gRPC client.
-type stubStatus struct{}
-
-func (stubStatus) GetSagaStatus(context.Context, string) (string, []string, string, error) {
-	return "", nil, "", errors.New("engine gRPC client not wired until task 7")
-}
 
 const defaultRingSlots = 1 << 20 // 1M slots = 256MB, per plan
 
@@ -51,8 +45,14 @@ func main() {
 	}
 	defer ring.Close()
 
+	grpcStatus, err := status.New(engineAddr)
+	if err != nil {
+		log.Fatalf("engine gRPC client %s: %v", engineAddr, err)
+	}
+	defer grpcStatus.Close()
+
 	mux := http.NewServeMux()
-	handler.NewTransfersHandler([]byte(secret), idempotency.New(), ring, audit.New(os.Stdout), stubStatus{}).Register(mux)
+	handler.NewTransfersHandler([]byte(secret), idempotency.New(), ring, audit.New(os.Stdout), grpcStatus).Register(mux)
 
 	srv := &http.Server{Addr: ":8080", Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	errCh := make(chan error, 1)

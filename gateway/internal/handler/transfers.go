@@ -20,7 +20,10 @@ import (
 )
 
 // EventTypeSagaStart is the only ring event type the gateway emits (proto/ipc-wire.md).
-const EventTypeSagaStart byte = 0x01
+const (
+	EventTypeSagaStart byte = 0x01
+	EventTypeStepFail  byte = 0x03 // test-client injection only (spec §7 flow)
+)
 
 // StatusClient proxies saga status lookups to the engine (real gRPC impl lands in Task 7).
 type StatusClient interface {
@@ -45,6 +48,7 @@ func NewTransfersHandler(secret []byte, idem *idempotency.Store, ring *ipc.RingW
 
 func (h *TransfersHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /transfers", h.handleTransfer)
+	mux.HandleFunc("POST /transfers/{id}/fail", h.handleTransferFail)
 	mux.HandleFunc("GET /sagas/{id}", h.handleSagaStatus)
 	mux.HandleFunc("GET /metricsz", h.handleMetricsz)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "ok") })
@@ -130,6 +134,35 @@ func (h *TransfersHandler) handleTransfer(w http.ResponseWriter, r *http.Request
 
 	h.audit.Log("accepted", subject, "/transfers", sagaID.String(), key, time.Since(start).Milliseconds())
 	writeJSON(w, http.StatusAccepted, map[string]string{"saga_id": sagaID.String(), "status": "accepted"})
+}
+
+// handleTransferFail injects STEP_FAIL into the ring for an existing saga
+// (test-client hook per spec §7; a real downstream failure produces the same event).
+func (h *TransfersHandler) handleTransferFail(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	subject, err := authn.ValidateJWT(token, h.secret)
+	if err != nil {
+		h.unauthorizedTotal.Add(1)
+		h.reject(w, start, "", http.StatusUnauthorized, "unauthorized", "invalid or missing bearer token")
+		return
+	}
+	sagaID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		h.reject(w, start, subject, http.StatusBadRequest, "bad_request", "saga id must be a UUID")
+		return
+	}
+	if err := h.ring.Write(EventTypeStepFail, [16]byte(sagaID), nil); err != nil {
+		if errors.Is(err, ipc.ErrRingFull) {
+			h.ringFullTotal.Add(1)
+			h.reject(w, start, subject, http.StatusServiceUnavailable, "ring_full", "backpressure: engine ring full")
+			return
+		}
+		h.reject(w, start, subject, http.StatusInternalServerError, "internal_error", "ring write failed")
+		return
+	}
+	h.audit.Log("fail_injected", subject, "/transfers/"+sagaID.String()+"/fail", sagaID.String(), "", time.Since(start).Milliseconds())
+	writeJSON(w, http.StatusAccepted, map[string]string{"saga_id": sagaID.String(), "status": "fail_injected"})
 }
 
 func (h *TransfersHandler) handleSagaStatus(w http.ResponseWriter, r *http.Request) {
