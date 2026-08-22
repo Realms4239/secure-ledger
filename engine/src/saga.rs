@@ -84,9 +84,17 @@ fn now_ns() -> u64 {
 }
 
 fn saga_id_to_string(id: &[u8; 16]) -> String {
-    // uuid crate not in deps for slice #1 core; hex-encode raw bytes.
-    // Display-only concern; wire keeps raw bytes authoritative.
-    id.iter().map(|b| format!("{b:02x}")).collect()
+    // Canonical RFC 4122 display form so gateway uuid.New() strings match:
+    // 8-4-4-4-12 lowercase hex.
+    let h: String = id.iter().map(|b| format!("{b:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
 }
 
 impl SagaStore {
