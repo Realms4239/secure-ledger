@@ -59,15 +59,9 @@ func NewRingWriter(path string, numSlots int) (*RingWriter, error) {
 		f.Close()
 		return nil, err
 	}
-	// Initialize or validate header
-	// Read existing header to check if already initialized
 	hdr := make([]byte, headerSize)
 	if _, err := f.ReadAt(hdr, 0); err != nil {
-		// fresh file may be missing/empty → all-zero header → init below;
-		// any other read failure is a real I/O error
-		if !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
+		return nil, err
 	}
 	magic := binary.LittleEndian.Uint32(hdr[offMagic : offMagic+4])
 	ver := binary.LittleEndian.Uint16(hdr[offVersion : offVersion+2])

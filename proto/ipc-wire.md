@@ -20,7 +20,7 @@ Offset  Size  Field       Description
 136     4     magic       u32 LE = 0x534C5257 ("SLRW" — Secure Ledger Ring Wire)
 140     2     version     u16 LE = 1
 142     2     reserved    u16 LE = 0
-144     112   _pad2       zero to 256 B boundary (header is one slot-sized for alignment simplicity, but only first 128 B used; alternative impls may use 128 B header)
+144     112   _pad2       zero to 256 B boundary
 ```
 
 Capacity check: `capacity & (capacity - 1) == 0` else reject. Mask: `mask = capacity - 1`. Slot index: `idx = counter & mask`. Byte offset: `headerSize + idx * 256`. headerSize = 256 is normative; slot base = 256 + idx*256.
