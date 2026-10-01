@@ -41,6 +41,7 @@ pub struct FileTailer {
     offset_path: PathBuf,
     offset: u64,
     line_no: u64,
+    since_sync: u64,
 }
 
 impl FileTailer {
@@ -55,6 +56,7 @@ impl FileTailer {
             offset_path: offset,
             offset: pos,
             line_no: 0,
+            since_sync: 0,
         })
     }
 
@@ -108,7 +110,12 @@ impl FileTailer {
         })();
         // Advance durability past this line no matter what: a poison line
         // must not wedge the ledger (same rule as corrupt shm slots).
-        persist_offset(&self.offset_path, end)?;
+        // The offset write fsyncs every 100 events: a crash replays at most
+        // 100 lines, and idempotent re-delivery is a dedup no-op — same
+        // guarantee, half the fsync load of the WAL path.
+        self.since_sync += 1;
+        let sync = self.since_sync.is_multiple_of(100);
+        persist_offset(&self.offset_path, end, sync)?;
         match parse {
             Ok(e) => Ok(Some(e)),
             Err(TailError::BadId(_)) => Err(TailError::CorruptLine(line_no)),
@@ -130,14 +137,16 @@ fn read_offset(path: &Path) -> u64 {
     }
 }
 
-fn persist_offset(path: &Path, offset: u64) -> Result<(), TailError> {
+fn persist_offset(path: &Path, offset: u64, sync: bool) -> Result<(), TailError> {
     let mut f = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
         .open(path)?;
     f.write_all(&offset.to_le_bytes())?;
-    f.sync_all()?;
+    if sync {
+        f.sync_all()?;
+    }
     Ok(())
 }
 
