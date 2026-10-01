@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -14,6 +18,8 @@ import (
 
 	"secureledger/gateway/internal/audit"
 	"secureledger/gateway/internal/authn"
+	"secureledger/gateway/internal/dash"
+	"secureledger/gateway/internal/fraud"
 	"secureledger/gateway/internal/idempotency"
 	"secureledger/gateway/internal/ipc"
 	"secureledger/gateway/internal/policy"
@@ -33,31 +39,63 @@ type StatusClient interface {
 type TransfersHandler struct {
 	secret []byte
 	idem   *idempotency.Store
-	ring   *ipc.RingWriter
+	sink   ipc.Sink
 	audit  *audit.Logger
 	status StatusClient
+	fraud  *fraud.Store
+
+	settlementDir string
+	reportPath    string
+
+	hub           *dash.Hub
+	partitionFlag string
 
 	ringFullTotal     atomic.Int64
 	unauthorizedTotal atomic.Int64
 	duplicateKeyTotal atomic.Int64
+	fraudHoldTotal    atomic.Int64
 }
 
-func NewTransfersHandler(secret []byte, idem *idempotency.Store, ring *ipc.RingWriter, lg *audit.Logger, status StatusClient) *TransfersHandler {
-	return &TransfersHandler{secret: secret, idem: idem, ring: ring, audit: lg, status: status}
+func NewTransfersHandler(secret []byte, idem *idempotency.Store, sink ipc.Sink, lg *audit.Logger, status StatusClient, fr *fraud.Store, settlementDir, reportPath string) *TransfersHandler {
+	return &TransfersHandler{secret: secret, idem: idem, sink: sink, audit: lg, status: status, fraud: fr, settlementDir: settlementDir, reportPath: reportPath}
 }
 
 func (h *TransfersHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /transfers", h.handleTransfer)
 	mux.HandleFunc("POST /transfers/{id}/fail", h.handleTransferFail)
 	mux.HandleFunc("GET /sagas/{id}", h.handleSagaStatus)
+	mux.HandleFunc("POST /settlement/upload", h.handleSettlementUpload)
+	mux.HandleFunc("GET /report", h.handleReport)
+	mux.HandleFunc("POST /chaos/partition", h.handleChaosPartition)
 	mux.HandleFunc("GET /metricsz", h.handleMetricsz)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "ok") })
+}
+
+// SetHub attaches the dashboard event hub; nil (tests, minimal runs) disables
+// event broadcast without touching intake behavior.
+func (h *TransfersHandler) SetHub(hub *dash.Hub) { h.hub = hub }
+
+// SetPartitionFlag sets the flag file the engine watches: present = network
+// partition (engine pauses intake, catch-up replay on removal).
+func (h *TransfersHandler) SetPartitionFlag(path string) { h.partitionFlag = path }
+
+// emit publishes a dashboard event; nil-hub is a no-op by design.
+func (h *TransfersHandler) emit(kind, subject, route, sagaID, detail string) {
+	if h.hub == nil {
+		return
+	}
+	raw, _ := json.Marshal(map[string]string{
+		"kind": kind, "subject": subject, "route": route, "saga_id": sagaID, "detail": detail,
+	})
+	h.hub.Publish(string(raw))
 }
 
 type transferRequest struct {
 	FromAccount string  `json:"from_account"`
 	ToAccount   string  `json:"to_account"`
 	Amount      float64 `json:"amount"`
+	Operator    string  `json:"operator"`
+	Txid        string  `json:"txid"`
 }
 
 type transferPayload struct {
@@ -65,12 +103,32 @@ type transferPayload struct {
 	To             string  `json:"to"`
 	Amount         float64 `json:"amount"`
 	IdempotencyKey string  `json:"idempotency_key"`
+	Operator       string  `json:"operator"`
+	Txid           string  `json:"txid"`
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// operatorOf defaults the originating operator for seed simplicity; real
+// operator traffic always sets it explicitly.
+func operatorOf(op string) string {
+	if op == "" {
+		return "mvola"
+	}
+	return op
+}
+
+// txidOf defaults the operator-side transaction id; the seed/loader sets it
+// explicitly so settlement rows can join back to sagas.
+func txidOf(txid string) string {
+	if txid == "" {
+		return uuid.NewString()
+	}
+	return txid
 }
 
 func (h *TransfersHandler) reject(w http.ResponseWriter, start time.Time, subject string, code int, decision, msg string) {
@@ -100,7 +158,10 @@ func (h *TransfersHandler) handleTransfer(w http.ResponseWriter, r *http.Request
 		h.reject(w, start, subject, http.StatusBadRequest, "bad_request", "body must be {from_account,to_account,amount>0}")
 		return
 	}
-
+	if req.Amount != math.Trunc(req.Amount) {
+		h.reject(w, start, subject, http.StatusBadRequest, "bad_request", "amount must be integer minor units")
+		return
+	}
 	if !policy.Authorized(subject, req.FromAccount) {
 		h.reject(w, start, subject, http.StatusForbidden, "forbidden", "subject may not debit from_account")
 		return
@@ -111,19 +172,37 @@ func (h *TransfersHandler) handleTransfer(w http.ResponseWriter, r *http.Request
 	if dup {
 		h.duplicateKeyTotal.Add(1)
 		h.audit.Log("duplicate", subject, "/transfers", existing, key, time.Since(start).Milliseconds())
+		h.emit("duplicate", subject, "/transfers", existing, key)
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "duplicate_idempotency_key", "saga_id": existing})
+		return
+	}
+	// Fraud plugin (Project A rules v1): scored after dedup so an identical
+	// retry always answers 409 instead of re-scoring. A hold stays out of the
+	// sink and the ledger entirely — audit + counter carry it to review.
+	if held, reason := h.fraud.Check(subject, operatorOf(req.Operator), req.Amount, time.Now().Unix()); held {
+		h.fraudHoldTotal.Add(1)
+		h.audit.Log("fraud_hold", subject, "/transfers", "", key, time.Since(start).Milliseconds())
+		h.emit("held_for_review", subject, "/transfers", "", reason)
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "held_for_review", "reason": reason})
 		return
 	}
 	// ponytail: key is now mapped to sagaID before the ring write; on ErrRingFull a retry of
 	// this key gets 409 pointing at a saga that never started. Store needs Delete to roll back — add if backpressure retries matter.
 
-	payload, err := json.Marshal(transferPayload{req.FromAccount, req.ToAccount, req.Amount, key})
+	payload, err := json.Marshal(transferPayload{
+		From:           req.FromAccount,
+		To:             req.ToAccount,
+		Amount:         req.Amount,
+		IdempotencyKey: key,
+		Operator:       operatorOf(req.Operator),
+		Txid:           txidOf(req.Txid),
+	})
 	if err != nil {
 		h.reject(w, start, subject, http.StatusInternalServerError, "internal_error", "payload marshal failed")
 		return
 	}
-	if err := h.ring.Write(EventTypeSagaStart, [16]byte(sagaID), payload); err != nil {
-		if errors.Is(err, ipc.ErrRingFull) {
+	if err := h.sink.Write(EventTypeSagaStart, [16]byte(sagaID), payload); err != nil {
+		if errors.Is(err, ipc.ErrSinkFull) {
 			h.ringFullTotal.Add(1)
 			h.reject(w, start, subject, http.StatusServiceUnavailable, "ring_full", "backpressure: engine ring full")
 			return
@@ -133,6 +212,7 @@ func (h *TransfersHandler) handleTransfer(w http.ResponseWriter, r *http.Request
 	}
 
 	h.audit.Log("accepted", subject, "/transfers", sagaID.String(), key, time.Since(start).Milliseconds())
+	h.emit("accepted", subject, "/transfers", sagaID.String(), operatorOf(req.Operator))
 	writeJSON(w, http.StatusAccepted, map[string]string{"saga_id": sagaID.String(), "status": "accepted"})
 }
 
@@ -152,8 +232,8 @@ func (h *TransfersHandler) handleTransferFail(w http.ResponseWriter, r *http.Req
 		h.reject(w, start, subject, http.StatusBadRequest, "bad_request", "saga id must be a UUID")
 		return
 	}
-	if err := h.ring.Write(EventTypeStepFail, [16]byte(sagaID), nil); err != nil {
-		if errors.Is(err, ipc.ErrRingFull) {
+	if err := h.sink.Write(EventTypeStepFail, [16]byte(sagaID), nil); err != nil {
+		if errors.Is(err, ipc.ErrSinkFull) {
 			h.ringFullTotal.Add(1)
 			h.reject(w, start, subject, http.StatusServiceUnavailable, "ring_full", "backpressure: engine ring full")
 			return
@@ -177,8 +257,93 @@ func (h *TransfersHandler) handleSagaStatus(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]any{"saga_id": id, "state": state, "steps": steps, "updated_at": updatedAt})
 }
 
+// handleChaosPartition toggles the engine's partition flag (JWT-required:
+// chaos is privileged). ON = engine pauses intake, mimicking a network
+// partition; OFF = catch-up replay. Same file-drop rule as settlement.
+func (h *TransfersHandler) handleChaosPartition(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	subject, err := authn.ValidateJWT(token, h.secret)
+	if err != nil {
+		h.unauthorizedTotal.Add(1)
+		h.reject(w, start, "", http.StatusUnauthorized, "unauthorized", "invalid or missing bearer token")
+		return
+	}
+	if h.partitionFlag == "" {
+		h.reject(w, start, subject, http.StatusInternalServerError, "internal_error", "partition flag unconfigured")
+		return
+	}
+	var req struct {
+		On bool `json:"on"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.reject(w, start, subject, http.StatusBadRequest, "bad_request", "body must be {on:bool}")
+		return
+	}
+	if req.On {
+		if err := os.WriteFile(h.partitionFlag, []byte("partition\n"), 0o644); err != nil {
+			h.reject(w, start, subject, http.StatusInternalServerError, "internal_error", "flag write failed")
+			return
+		}
+	} else if err := os.Remove(h.partitionFlag); err != nil && !os.IsNotExist(err) {
+		h.reject(w, start, subject, http.StatusInternalServerError, "internal_error", "flag remove failed")
+		return
+	}
+	h.audit.Log("partition", subject, "/chaos/partition", "", "", time.Since(start).Milliseconds())
+	state := "off"
+	if req.On {
+		state = "on"
+	}
+	h.emit("partition", subject, "/chaos/partition", "", state)
+	writeJSON(w, http.StatusAccepted, map[string]any{"partition": req.On})
+}
+
 func (h *TransfersHandler) handleMetricsz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "ring_full_total %d\nunauthorized_total %d\nduplicate_key_total %d\n",
-		h.ringFullTotal.Load(), h.unauthorizedTotal.Load(), h.duplicateKeyTotal.Load())
+	fmt.Fprintf(w, "ring_full_total %d\nunauthorized_total %d\nduplicate_key_total %d\nfraud_hold_total %d\n",
+		h.ringFullTotal.Load(), h.unauthorizedTotal.Load(), h.duplicateKeyTotal.Load(), h.fraudHoldTotal.Load())
+}
+
+// handleSettlementUpload accepts a raw operator settlement CSV and drops it
+// where the engine sweep picks it up. File-drop keeps the no-new-RPC rule:
+// the engine never trusts the gateway beyond bytes on disk.
+func (h *TransfersHandler) handleSettlementUpload(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	subject, err := authn.ValidateJWT(token, h.secret)
+	if err != nil {
+		h.unauthorizedTotal.Add(1)
+		h.reject(w, start, "", http.StatusUnauthorized, "unauthorized", "invalid or missing bearer token")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
+	if err != nil || len(body) == 0 {
+		h.reject(w, start, subject, http.StatusBadRequest, "bad_request", "body must be raw settlement CSV")
+		return
+	}
+	if err := os.MkdirAll(h.settlementDir, 0o755); err != nil {
+		h.reject(w, start, subject, http.StatusInternalServerError, "internal_error", "settlement dir unavailable")
+		return
+	}
+	name := fmt.Sprintf("incoming-%d.csv", time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(h.settlementDir, name), body, 0o644); err != nil {
+		h.reject(w, start, subject, http.StatusInternalServerError, "internal_error", "settlement write failed")
+		return
+	}
+	h.audit.Log("settlement_uploaded", subject, "/settlement/upload", name, "", time.Since(start).Milliseconds())
+	h.emit("settlement_uploaded", subject, "/settlement/upload", name, "")
+	writeJSON(w, http.StatusAccepted, map[string]any{"file": name, "bytes": len(body)})
+}
+
+// handleReport serves the engine's latest match report verbatim. Absent file
+// means no settlement has been processed yet — not an error in the ledger.
+func (h *TransfersHandler) handleReport(w http.ResponseWriter, _ *http.Request) {
+	raw, err := os.ReadFile(h.reportPath)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no settlement processed yet"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(raw)
 }

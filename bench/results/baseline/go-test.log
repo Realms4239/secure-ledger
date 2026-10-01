@@ -1,0 +1,10 @@
+?   	secureledger/gateway/cmd/gateway	[no test files]
+?   	secureledger/gateway/cmd/ringpeek	[no test files]
+?   	secureledger/gateway/internal/audit	[no test files]
+ok  	secureledger/gateway/internal/authn	1.550s
+ok  	secureledger/gateway/internal/handler	2.375s
+ok  	secureledger/gateway/internal/idempotency	1.589s
+ok  	secureledger/gateway/internal/ipc	1.458s
+ok  	secureledger/gateway/internal/policy	1.084s
+?   	secureledger/gateway/internal/status	[no test files]
+?   	secureledger/gateway/proto	[no test files]

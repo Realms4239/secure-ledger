@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"secureledger/gateway/internal/audit"
+	"secureledger/gateway/internal/dash"
+	"secureledger/gateway/internal/fraud"
 	"secureledger/gateway/internal/handler"
 	"secureledger/gateway/internal/idempotency"
 	"secureledger/gateway/internal/ipc"
@@ -34,20 +36,43 @@ func main() {
 	if gatewayAddr == "" {
 		gatewayAddr = ":8080"
 	}
-	ringPath := os.Getenv("RING_PATH")
-	if ringPath == "" {
-		// ponytail: Windows dev has no /dev/shm — fall back to temp dir; WSL2/Linux keeps the shm bench path
-		if runtime.GOOS == "windows" {
-			ringPath = filepath.Join(os.TempDir(), "secureledger.ring")
-		} else {
-			ringPath = "/dev/shm/secureledger.ring"
+	transport := os.Getenv("TRANSPORT")
+	if transport == "" {
+		transport = "shm"
+	}
+	var sink ipc.Sink
+	var ringPath string
+	switch transport {
+	case "file":
+		eventsPath := os.Getenv("EVENTS_PATH")
+		if eventsPath == "" {
+			eventsPath = "data/events.log"
 		}
+		fs, err := ipc.NewFileSink(eventsPath)
+		if err != nil {
+			log.Fatalf("open events file %s: %v", eventsPath, err)
+		}
+		defer fs.Close()
+		sink = fs
+		log.Printf("gateway transport=file events=%s", eventsPath)
+	default:
+		ringPath = os.Getenv("RING_PATH")
+		if ringPath == "" {
+			// ponytail: Windows dev has no /dev/shm — fall back to temp dir; WSL2/Linux keeps the shm bench path
+			if runtime.GOOS == "windows" {
+				ringPath = filepath.Join(os.TempDir(), "secureledger.ring")
+			} else {
+				ringPath = "/dev/shm/secureledger.ring"
+			}
+		}
+		ring, err := ipc.NewRingWriter(ringPath, defaultRingSlots)
+		if err != nil {
+			log.Fatalf("open ring %s: %v", ringPath, err)
+		}
+		defer ring.Close()
+		sink = ring
+		log.Printf("gateway transport=shm ring=%s", ringPath)
 	}
-	ring, err := ipc.NewRingWriter(ringPath, defaultRingSlots)
-	if err != nil {
-		log.Fatalf("open ring %s: %v", ringPath, err)
-	}
-	defer ring.Close()
 
 	grpcStatus, err := status.New(engineAddr)
 	if err != nil {
@@ -55,13 +80,32 @@ func main() {
 	}
 	defer grpcStatus.Close()
 
+	settlementDir := os.Getenv("SETTLEMENT_DIR")
+	if settlementDir == "" {
+		settlementDir = "data/settlement"
+	}
+	reportPath := os.Getenv("REPORT_PATH")
+	if reportPath == "" {
+		reportPath = "data/match-report.json"
+	}
+
+	partitionFlag := os.Getenv("PARTITION_FLAG")
+	if partitionFlag == "" {
+		partitionFlag = "data/partition.flag"
+	}
+
 	mux := http.NewServeMux()
-	handler.NewTransfersHandler([]byte(secret), idempotency.New(), ring, audit.New(os.Stdout), grpcStatus).Register(mux)
+	hub := dash.NewHub()
+	hub.Register(mux)
+	transfers := handler.NewTransfersHandler([]byte(secret), idempotency.New(), sink, audit.New(os.Stdout), grpcStatus, fraud.New(), settlementDir, reportPath)
+	transfers.SetHub(hub)
+	transfers.SetPartitionFlag(partitionFlag)
+	transfers.Register(mux)
 
 	srv := &http.Server{Addr: gatewayAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
-	log.Printf("gateway listening on %s engine=%s ring=%s", gatewayAddr, engineAddr, ringPath)
+	log.Printf("gateway listening on %s engine=%s", gatewayAddr, engineAddr)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)

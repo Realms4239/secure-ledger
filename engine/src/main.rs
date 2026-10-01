@@ -1,11 +1,15 @@
 mod grpc;
+mod pg;
 mod ring;
 mod saga;
+mod settle;
+mod tail;
 mod wire;
 
 use crate::grpc::pb::reconciliation_server::ReconciliationServer;
 use crate::grpc::pb;
 use crate::ring::RingReader;
+use crate::tail::{FileTailer, TailError};
 use crate::saga::{SagaState, SagaStore, StoreError, TYPE_COMPENSATE, TYPE_SAGA_START, TYPE_STEP_FAIL, TYPE_STEP_OK};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -19,7 +23,6 @@ fn env_or(key: &str, default: &str) -> String {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wal_path = PathBuf::from(env_or("WAL_PATH", "data/wal.log"));
-    let ring_path = PathBuf::from(env_or("RING_PATH", "/dev/shm/secureledger.ring"));
     let addr = env_or("ENGINE_ADDR", "0.0.0.0:50051");
 
     // 1. Replay WAL into saga state (RPO = last fsynced record)
@@ -46,11 +49,89 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let store = Arc::new(Mutex::new(store));
 
-    // 2. Ring consumer task (polls; sleeps when empty)
+    // 2. Event consumer task (polls; sleeps when empty). TRANSPORT=file is the
+    // Windows demo path (JSONL tail with persisted offset); shm is the frozen
+    // WSL2 bench path.
+    let transport = env_or("TRANSPORT", "file");
+    println!("engine: transport={transport}");
     let consumer_store = Arc::clone(&store);
-    let ring_for_consumer = ring_path.clone();
     let consumer = tokio::task::spawn_blocking(move || {
-        run_ring_consumer(ring_for_consumer, consumer_store)
+        if transport == "file" {
+            let events = PathBuf::from(
+                std::env::var("EVENTS_PATH").unwrap_or_else(|_| "data/events.log".to_string()),
+            );
+            let offset = PathBuf::from(
+                std::env::var("EVENTS_OFFSET")
+                    .unwrap_or_else(|_| "data/events.offset".to_string()),
+            );
+            let flag = PathBuf::from(
+                std::env::var("PARTITION_FLAG")
+                    .unwrap_or_else(|_| "data/partition.flag".to_string()),
+            );
+            run_file_consumer(events, offset, flag, consumer_store)
+        } else {
+            let ring_path = PathBuf::from(
+                std::env::var("RING_PATH")
+                    .unwrap_or_else(|_| "/dev/shm/secureledger.ring".to_string()),
+            );
+            run_ring_consumer(ring_path, consumer_store)
+        }
+    });
+
+    // Settlement sweep: every 5s ingest new CSVs from SETTLEMENT_DIR, match
+    // against saga snapshots, annotate steps, and rewrite the report file the
+    // gateway serves at GET /report. File-drop keeps the no-proto-change rule.
+    let sweep_store = Arc::clone(&store);
+    let settlement_dir = PathBuf::from(env_or("SETTLEMENT_DIR", "data/settlement"));
+    let report_path = PathBuf::from(env_or("REPORT_PATH", "data/match-report.json"));
+    tokio::task::spawn_blocking(move || {
+        run_settlement_sweep(settlement_dir, report_path, sweep_store)
+    });
+
+    // Postgres mirror: queryable truth behind the WAL. Empty DATABASE_URL
+    // skips PG entirely; unreachable PG degrades (WAL truth keeps serving)
+    // with reconnect retries and full backfill on success (AP-explicit).
+    let pg_store = Arc::clone(&store);
+    let pg_url = env_or("DATABASE_URL", "");
+    tokio::spawn(async move {
+        if pg_url.is_empty() {
+            println!("engine: pg disabled (DATABASE_URL unset)");
+            return;
+        }
+        loop {
+            match crate::pg::PgSink::connect(&pg_url).await {
+                Ok((sink, _conn)) => {
+                    if let Err(e) = sink.ensure_schema().await {
+                        eprintln!("engine: pg degraded (schema: {e}); retry in 10s");
+                        tokio::time::sleep(Duration::from_secs(10)).await;
+                        continue;
+                    }
+                    println!("engine: pg mirror live");
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        let snaps: Vec<crate::saga::Saga> = match pg_store.lock() {
+                            Ok(g) => g.sagas().cloned().collect(),
+                            Err(_) => return, // poisoned
+                        };
+                        let mut failed = 0u32;
+                        for s in &snaps {
+                            if sink.upsert_saga(s).await.is_err() {
+                                failed += 1;
+                                break;
+                            }
+                        }
+                        if failed > 0 {
+                            eprintln!("engine: pg degraded (write failed); reconnecting");
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("engine: pg degraded (connect: {e}); retry in 10s");
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                }
+            }
+        }
     });
 
     // 3. gRPC status server — GrpcBridge shares the same Arc'd store as the
@@ -100,6 +181,145 @@ impl crate::grpc::pb::reconciliation_server::Reconciliation for GrpcBridge {
                 updated_at: saga.updated_at_ns.to_string(),
             })),
             None => Err(tonic::Status::not_found(format!("saga {id} not found"))),
+        }
+    }
+}
+
+fn run_file_consumer(
+    events: PathBuf,
+    offset: PathBuf,
+    partition_flag: PathBuf,
+    store: Arc<Mutex<SagaStore>>,
+) {
+    let mut apart = false; // log partition transitions once, not every second
+    let mut tail = loop {
+        match FileTailer::open(events.clone(), offset.clone()) {
+            Ok(t) => break t,
+            Err(e) => {
+                eprintln!("engine: events file not ready ({e}), retrying in 1s");
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        }
+    };
+    loop {
+        // Partition simulation (AIR D channel stop/replay): flag present =
+        // intake paused, offsets frozen; removal = catch-up replay. The WAL
+        // keeps every accepted event, so no state is invented or lost.
+        if partition_flag.exists() {
+            if !apart {
+                eprintln!("engine: partition ON — intake paused");
+                apart = true;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+            continue;
+        } else if apart {
+            eprintln!("engine: partition OFF — catch-up replay");
+            apart = false;
+        }
+        match tail.next() {
+            Ok(Some(e)) => {
+                let mut guard = match store.lock() {
+                    Ok(g) => g,
+                    Err(_) => return, // poisoned
+                };
+                if let Err(e2) = guard.apply(e.typ, &e.saga_id, &e.payload) {
+                    eprintln!("engine: apply error type={:#x}: {e2}", e.typ);
+                    // consumed; keep going (same rule as ring consumer)
+                }
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(1)),
+            Err(TailError::CorruptLine(n)) => {
+                eprintln!("engine: corrupt file line {n}; skipped, offset advanced");
+            }
+            Err(e) => {
+                eprintln!("engine: tail read error: {e}");
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+}
+
+fn now_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
+fn run_settlement_sweep(dir: PathBuf, report: PathBuf, store: Arc<Mutex<SagaStore>>) {
+    // Re-sweep every file every cycle: intake (loader) and settlement (CSV)
+    // race, so a one-shot match would orphan rows whose sagas arrive later.
+    // Re-matching is idempotent — step notes dedupe, the report rewrites.
+    let mut seen: Vec<PathBuf> = Vec::new();
+    loop {
+        std::thread::sleep(Duration::from_secs(5));
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("csv")
+                    && !seen.contains(&path)
+                {
+                    seen.push(path);
+                }
+            }
+        }
+        if seen.is_empty() {
+            continue; // no settlement dropped yet; retry
+        }
+        let mut rows: Vec<crate::settle::SettlementRow> = Vec::new();
+        let mut corrupt = 0u64;
+        for path in &seen {
+            match std::fs::read_to_string(path) {
+                Ok(text) => {
+                    let (mut r, c) = crate::settle::parse_csv(&text);
+                    rows.append(&mut r);
+                    corrupt += c;
+                }
+                Err(e) => eprintln!("engine: settlement {} unreadable: {e}", path.display()),
+            }
+        }
+        let mut guard = match store.lock() {
+            Ok(g) => g,
+            Err(_) => return, // poisoned
+        };
+        let snaps: Vec<crate::settle::SagaSnap> = guard
+            .sagas()
+            .map(|s| crate::settle::SagaSnap {
+                saga_id: s.saga_id.clone(),
+                txid: s.txid.clone(),
+                amount: s.amount,
+                updated_at_ns: s.updated_at_ns,
+            })
+            .collect();
+        let total = snaps.len();
+        let outcome = crate::settle::match_all(&snaps, &rows);
+        for (sid, note) in &outcome.notes {
+            guard.annotate(sid, note.clone());
+        }
+            let mut rep = outcome.report;
+            rep.csv_corrupt += corrupt;
+            drop(guard);
+            // Deterministic report bytes: saga iteration order is HashMap
+            // random per process, so sort the id lists — reports must diff
+            // cleanly across restarts (recovery drill compares them).
+            rep.missing.sort();
+            rep.orphan.sort();
+            rep.mismatch.sort();
+        let doc = serde_json::json!({ "generated_at_ns": now_ns(), "report": rep });
+        if let Some(parent) = report.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::write(&report, serde_json::to_string_pretty(&doc).unwrap()) {
+            Ok(()) => println!(
+                "engine: settlement sweep over {} sagas: {} exact + {} tolerated, {}/{}/{} missing/orphan/mismatch",
+                total,
+                rep.settled,
+                rep.tolerated,
+                rep.missing.len(),
+                rep.orphan.len(),
+                rep.mismatch.len()
+            ),
+            Err(e) => eprintln!("engine: report write failed: {e}"),
         }
     }
 }

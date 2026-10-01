@@ -34,6 +34,10 @@ pub struct Saga {
     pub steps: Vec<String>,
     pub idempotency_key: String,
     pub updated_at_ns: u64,
+    pub operator: String,
+    pub txid: String,
+    pub to: String,
+    pub amount: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,10 +48,17 @@ struct Payload {
     #[serde(default)]
     amount: i64,
     idempotency_key: String,
+    #[serde(default)]
+    operator: String,
+    #[serde(default)]
+    txid: String,
 }
 
 // WAL line format (one JSON object per line):
-// {"saga_id":"uuid","idempotency_key":"...","typ":1,"state":"in_progress","ts":<ns>}
+// {"saga_id":"uuid","idempotency_key":"...","typ":1,"state":"in_progress","ts":<ns>,
+//  "operator":"mvola","txid":"...","to":"bob","amount":100}
+// operator/txid/to/amount were added for settlement matching; old WAL lines
+// without them replay with defaults (empty/0) via serde(default).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalEntry {
     pub saga_id: String,
@@ -55,6 +66,14 @@ pub struct WalEntry {
     pub typ: u8,
     pub state: String,
     pub ts: u64,
+    #[serde(default)]
+    pub operator: String,
+    #[serde(default)]
+    pub txid: String,
+    #[serde(default)]
+    pub to: String,
+    #[serde(default)]
+    pub amount: i64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -72,6 +91,7 @@ pub enum StoreError {
 pub struct SagaStore {
     sagas: HashMap<String, Saga>,
     dedup: HashMap<String, String>, // idempotency_key -> saga_id
+    txids: HashMap<String, String>, // operator txid -> saga_id (settlement join key)
     wal: Wal,
     pub duplicate_events_total: u64,
 }
@@ -106,6 +126,7 @@ impl SagaStore {
         stats.entries_replayed = entries.len();
         let mut sagas = HashMap::new();
         let mut dedup = HashMap::new();
+        let mut txids = HashMap::new();
         for e in &entries {
             let state = parse_state(&e.state)?;
             let entry = sagas.entry(e.saga_id.clone()).or_insert_with(|| Saga {
@@ -114,6 +135,10 @@ impl SagaStore {
                 steps: Vec::new(),
                 idempotency_key: e.idempotency_key.clone(),
                 updated_at_ns: e.ts,
+                operator: e.operator.clone(),
+                txid: e.txid.clone(),
+                to: e.to.clone(),
+                amount: e.amount,
             });
             entry.state = state;
             entry.updated_at_ns = e.ts;
@@ -121,11 +146,15 @@ impl SagaStore {
                 entry.steps.push(format!("type_{}", e.typ));
             }
             dedup.insert(e.idempotency_key.clone(), e.saga_id.clone());
+            if !e.txid.is_empty() {
+                txids.insert(e.txid.clone(), e.saga_id.clone());
+            }
         }
         Ok((
             Self {
                 sagas,
                 dedup,
+                txids,
                 wal,
                 duplicate_events_total: 0,
             },
@@ -154,6 +183,10 @@ impl SagaStore {
                     typ,
                     state: "in_progress".into(),
                     ts: now_ns(),
+                    operator: p.operator.clone(),
+                    txid: p.txid.clone(),
+                    to: p.to.clone(),
+                    amount: p.amount,
                 };
                 self.wal.append(&entry)?;
                 self.sagas.insert(
@@ -164,9 +197,16 @@ impl SagaStore {
                         steps: vec!["saga_start".into()],
                         idempotency_key: p.idempotency_key.clone(),
                         updated_at_ns: entry.ts,
+                        operator: p.operator.clone(),
+                        txid: p.txid.clone(),
+                        to: p.to.clone(),
+                        amount: p.amount,
                     },
                 );
-                self.dedup.insert(p.idempotency_key, sid);
+                self.dedup.insert(p.idempotency_key, sid.clone());
+                if !p.txid.is_empty() {
+                    self.txids.insert(p.txid, sid);
+                }
                 Ok(true)
             }
             TYPE_STEP_FAIL | TYPE_COMPENSATE => {
@@ -187,6 +227,10 @@ impl SagaStore {
                     typ,
                     state: state_str(saga.state).to_string(),
                     ts: saga.updated_at_ns,
+                    operator: saga.operator.clone(),
+                    txid: saga.txid.clone(),
+                    to: saga.to.clone(),
+                    amount: saga.amount,
                 };
                 self.wal.append(&entry)?;
                 Ok(true)
@@ -204,6 +248,10 @@ impl SagaStore {
                     typ,
                     state: state_str(saga.state).to_string(),
                     ts: saga.updated_at_ns,
+                    operator: saga.operator.clone(),
+                    txid: saga.txid.clone(),
+                    to: saga.to.clone(),
+                    amount: saga.amount,
                 };
                 self.wal.append(&entry)?;
                 Ok(true)
@@ -214,6 +262,19 @@ impl SagaStore {
 
     pub fn get(&self, saga_id_hex: &str) -> Option<&Saga> {
         self.sagas.get(saga_id_hex)
+    }
+
+    pub fn sagas(&self) -> impl Iterator<Item = &Saga> {
+        self.sagas.values()
+    }
+
+    /// Append a match note to a saga's steps (deduped; surfaced via status).
+    pub fn annotate(&mut self, saga_id: &str, note: String) {
+        if let Some(s) = self.sagas.get_mut(saga_id) {
+            if !s.steps.contains(&note) {
+                s.steps.push(note);
+            }
+        }
     }
 
     #[allow(dead_code)]
