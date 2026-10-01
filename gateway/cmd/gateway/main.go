@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"secureledger/gateway/internal/audit"
+	"secureledger/gateway/internal/dash"
 	"secureledger/gateway/internal/fraud"
 	"secureledger/gateway/internal/handler"
 	"secureledger/gateway/internal/idempotency"
@@ -88,8 +89,18 @@ func main() {
 		reportPath = "data/match-report.json"
 	}
 
+	partitionFlag := os.Getenv("PARTITION_FLAG")
+	if partitionFlag == "" {
+		partitionFlag = "data/partition.flag"
+	}
+
 	mux := http.NewServeMux()
-	handler.NewTransfersHandler([]byte(secret), idempotency.New(), sink, audit.New(os.Stdout), grpcStatus, fraud.New(), settlementDir, reportPath).Register(mux)
+	hub := dash.NewHub()
+	hub.Register(mux)
+	transfers := handler.NewTransfersHandler([]byte(secret), idempotency.New(), sink, audit.New(os.Stdout), grpcStatus, fraud.New(), settlementDir, reportPath)
+	transfers.SetHub(hub)
+	transfers.SetPartitionFlag(partitionFlag)
+	transfers.Register(mux)
 
 	srv := &http.Server{Addr: gatewayAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	errCh := make(chan error, 1)

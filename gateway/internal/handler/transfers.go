@@ -18,6 +18,7 @@ import (
 
 	"secureledger/gateway/internal/audit"
 	"secureledger/gateway/internal/authn"
+	"secureledger/gateway/internal/dash"
 	"secureledger/gateway/internal/fraud"
 	"secureledger/gateway/internal/idempotency"
 	"secureledger/gateway/internal/ipc"
@@ -46,6 +47,9 @@ type TransfersHandler struct {
 	settlementDir string
 	reportPath    string
 
+	hub           *dash.Hub
+	partitionFlag string
+
 	ringFullTotal     atomic.Int64
 	unauthorizedTotal atomic.Int64
 	duplicateKeyTotal atomic.Int64
@@ -62,8 +66,28 @@ func (h *TransfersHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /sagas/{id}", h.handleSagaStatus)
 	mux.HandleFunc("POST /settlement/upload", h.handleSettlementUpload)
 	mux.HandleFunc("GET /report", h.handleReport)
+	mux.HandleFunc("POST /chaos/partition", h.handleChaosPartition)
 	mux.HandleFunc("GET /metricsz", h.handleMetricsz)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "ok") })
+}
+
+// SetHub attaches the dashboard event hub; nil (tests, minimal runs) disables
+// event broadcast without touching intake behavior.
+func (h *TransfersHandler) SetHub(hub *dash.Hub) { h.hub = hub }
+
+// SetPartitionFlag sets the flag file the engine watches: present = network
+// partition (engine pauses intake, catch-up replay on removal).
+func (h *TransfersHandler) SetPartitionFlag(path string) { h.partitionFlag = path }
+
+// emit publishes a dashboard event; nil-hub is a no-op by design.
+func (h *TransfersHandler) emit(kind, subject, route, sagaID, detail string) {
+	if h.hub == nil {
+		return
+	}
+	raw, _ := json.Marshal(map[string]string{
+		"kind": kind, "subject": subject, "route": route, "saga_id": sagaID, "detail": detail,
+	})
+	h.hub.Publish(string(raw))
 }
 
 type transferRequest struct {
@@ -149,6 +173,7 @@ func (h *TransfersHandler) handleTransfer(w http.ResponseWriter, r *http.Request
 	if held, reason := h.fraud.Check(subject, operatorOf(req.Operator), req.Amount, time.Now().Unix()); held {
 		h.fraudHoldTotal.Add(1)
 		h.audit.Log("fraud_hold", subject, "/transfers", "", key, time.Since(start).Milliseconds())
+		h.emit("held_for_review", subject, "/transfers", "", reason)
 		writeJSON(w, http.StatusAccepted, map[string]string{"status": "held_for_review", "reason": reason})
 		return
 	}
@@ -158,6 +183,7 @@ func (h *TransfersHandler) handleTransfer(w http.ResponseWriter, r *http.Request
 	if dup {
 		h.duplicateKeyTotal.Add(1)
 		h.audit.Log("duplicate", subject, "/transfers", existing, key, time.Since(start).Milliseconds())
+		h.emit("duplicate", subject, "/transfers", existing, key)
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "duplicate_idempotency_key", "saga_id": existing})
 		return
 	}
@@ -187,6 +213,7 @@ func (h *TransfersHandler) handleTransfer(w http.ResponseWriter, r *http.Request
 	}
 
 	h.audit.Log("accepted", subject, "/transfers", sagaID.String(), key, time.Since(start).Milliseconds())
+	h.emit("accepted", subject, "/transfers", sagaID.String(), operatorOf(req.Operator))
 	writeJSON(w, http.StatusAccepted, map[string]string{"saga_id": sagaID.String(), "status": "accepted"})
 }
 
@@ -231,6 +258,47 @@ func (h *TransfersHandler) handleSagaStatus(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]any{"saga_id": id, "state": state, "steps": steps, "updated_at": updatedAt})
 }
 
+// handleChaosPartition toggles the engine's partition flag (JWT-required:
+// chaos is privileged). ON = engine pauses intake, mimicking a network
+// partition; OFF = catch-up replay. Same file-drop rule as settlement.
+func (h *TransfersHandler) handleChaosPartition(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	subject, err := authn.ValidateJWT(token, h.secret)
+	if err != nil {
+		h.unauthorizedTotal.Add(1)
+		h.reject(w, start, "", http.StatusUnauthorized, "unauthorized", "invalid or missing bearer token")
+		return
+	}
+	if h.partitionFlag == "" {
+		h.reject(w, start, subject, http.StatusInternalServerError, "internal_error", "partition flag unconfigured")
+		return
+	}
+	var req struct {
+		On bool `json:"on"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.reject(w, start, subject, http.StatusBadRequest, "bad_request", "body must be {on:bool}")
+		return
+	}
+	if req.On {
+		if err := os.WriteFile(h.partitionFlag, []byte("partition\n"), 0o644); err != nil {
+			h.reject(w, start, subject, http.StatusInternalServerError, "internal_error", "flag write failed")
+			return
+		}
+	} else if err := os.Remove(h.partitionFlag); err != nil && !os.IsNotExist(err) {
+		h.reject(w, start, subject, http.StatusInternalServerError, "internal_error", "flag remove failed")
+		return
+	}
+	h.audit.Log("partition", subject, "/chaos/partition", "", "", time.Since(start).Milliseconds())
+	state := "off"
+	if req.On {
+		state = "on"
+	}
+	h.emit("partition", subject, "/chaos/partition", "", state)
+	writeJSON(w, http.StatusAccepted, map[string]any{"partition": req.On})
+}
+
 func (h *TransfersHandler) handleMetricsz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprintf(w, "ring_full_total %d\nunauthorized_total %d\nduplicate_key_total %d\nfraud_hold_total %d\n",
@@ -264,6 +332,7 @@ func (h *TransfersHandler) handleSettlementUpload(w http.ResponseWriter, r *http
 		return
 	}
 	h.audit.Log("settlement_uploaded", subject, "/settlement/upload", name, "", time.Since(start).Milliseconds())
+	h.emit("settlement_uploaded", subject, "/settlement/upload", name, "")
 	writeJSON(w, http.StatusAccepted, map[string]any{"file": name, "bytes": len(body)})
 }
 

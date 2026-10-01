@@ -64,7 +64,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::env::var("EVENTS_OFFSET")
                     .unwrap_or_else(|_| "data/events.offset".to_string()),
             );
-            run_file_consumer(events, offset, consumer_store)
+            let flag = PathBuf::from(
+                std::env::var("PARTITION_FLAG")
+                    .unwrap_or_else(|_| "data/partition.flag".to_string()),
+            );
+            run_file_consumer(events, offset, flag, consumer_store)
         } else {
             let ring_path = PathBuf::from(
                 std::env::var("RING_PATH")
@@ -181,7 +185,13 @@ impl crate::grpc::pb::reconciliation_server::Reconciliation for GrpcBridge {
     }
 }
 
-fn run_file_consumer(events: PathBuf, offset: PathBuf, store: Arc<Mutex<SagaStore>>) {
+fn run_file_consumer(
+    events: PathBuf,
+    offset: PathBuf,
+    partition_flag: PathBuf,
+    store: Arc<Mutex<SagaStore>>,
+) {
+    let mut apart = false; // log partition transitions once, not every second
     let mut tail = loop {
         match FileTailer::open(events.clone(), offset.clone()) {
             Ok(t) => break t,
@@ -192,6 +202,20 @@ fn run_file_consumer(events: PathBuf, offset: PathBuf, store: Arc<Mutex<SagaStor
         }
     };
     loop {
+        // Partition simulation (AIR D channel stop/replay): flag present =
+        // intake paused, offsets frozen; removal = catch-up replay. The WAL
+        // keeps every accepted event, so no state is invented or lost.
+        if partition_flag.exists() {
+            if !apart {
+                eprintln!("engine: partition ON — intake paused");
+                apart = true;
+            }
+            std::thread::sleep(Duration::from_secs(1));
+            continue;
+        } else if apart {
+            eprintln!("engine: partition OFF — catch-up replay");
+            apart = false;
+        }
         match tail.next() {
             Ok(Some(e)) => {
                 let mut guard = match store.lock() {

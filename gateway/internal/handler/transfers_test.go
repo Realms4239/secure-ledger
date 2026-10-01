@@ -437,3 +437,41 @@ func TestSettlementUploadAndReport(t *testing.T) {
 		t.Fatalf("report = %d %q", got.Code, got.Body.String())
 	}
 }
+
+func TestChaosPartitionToggle(t *testing.T) {
+	d := setup(t)
+	flag := filepath.Join(t.TempDir(), "partition.flag")
+	d.h.SetPartitionFlag(flag)
+	tok := makeToken(t, []byte(testSecret), "alice", time.Now().Add(time.Hour))
+
+	unauth := httptest.NewRequest("POST", "/chaos/partition", strings.NewReader(`{"on":true}`))
+	un := httptest.NewRecorder()
+	d.mux.ServeHTTP(un, unauth)
+	if un.Code != http.StatusUnauthorized {
+		t.Fatalf("chaos code = %d, want 401", un.Code)
+	}
+
+	do := func(on bool) *httptest.ResponseRecorder {
+		body := `{"on":false}`
+		if on {
+			body = `{"on":true}`
+		}
+		req := httptest.NewRequest("POST", "/chaos/partition", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		rec := httptest.NewRecorder()
+		d.mux.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := do(true); rec.Code != http.StatusAccepted {
+		t.Fatalf("partition on = %d, want 202", rec.Code)
+	}
+	if _, err := os.Stat(flag); err != nil {
+		t.Fatalf("flag file missing after ON: %v", err)
+	}
+	if rec := do(false); rec.Code != http.StatusAccepted {
+		t.Fatalf("partition off = %d, want 202", rec.Code)
+	}
+	if _, err := os.Stat(flag); !os.IsNotExist(err) {
+		t.Fatalf("flag file present after OFF")
+	}
+}

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SettleLedger</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:960px;margin:2em auto;padding:0 1em}
+section{border:1px solid #ccc;border-radius:8px;padding:1em;margin-bottom:1em}
+#log{list-style:none;padding:0;max-height:300px;overflow-y:auto}
+#log li{font-family:monospace;font-size:13px;border-bottom:1px dotted #ddd;padding:2px 0}
+pre{background:#f6f6f6;padding:0.5em;overflow-x:auto}
+button{margin-right:0.5em}
+</style>
+</head>
+<body>
+<h1>SettleLedger — settlement reconciliation</h1>
+
+<section>
+<h2>Live intake</h2>
+<ul id="log"></ul>
+</section>
+
+<section>
+<h2>Saga lookup</h2>
+<input id="sagaid" placeholder="saga uuid" size="40">
+<button onclick="lookup()">Lookup</button>
+<pre id="saga">—</pre>
+<script>
+function lookup(){
+  fetch('/sagas/'+document.getElementById('sagaid').value)
+    .then(r=>r.text()).then(t=>document.getElementById('saga').textContent=t);
+}
+</script>
+</section>
+
+<section>
+<h2>Match report</h2>
+<pre id="report">loading…</pre>
+</section>
+
+<section>
+<h2>Gateway metrics</h2>
+<pre id="metrics">loading…</pre>
+</section>
+
+<section>
+<h2>Last measured bench</h2>
+<pre id="bench">loading…</pre>
+</section>
+
+<section>
+<h2>Chaos</h2>
+<button onclick="partition(true)">Partition ON (engine pauses intake)</button>
+<button onclick="partition(false)">Partition OFF (catch-up replay)</button>
+<p>Kill-9 drill is manual: stop the engine process, restart it, watch states
+return via lookup above. Scripted in <code>scripts/recovery.ps1</code>.</p>
+<script>
+function partition(on){
+  fetch('/chaos/partition',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({on:on})}).then(r=>r.text()).then(t=>alert(t));
+}
+</script>
+</section>
+
+<script>
+const log=document.getElementById('log');
+const es=new EventSource('/events/stream');
+es.onmessage=e=>{
+  const li=document.createElement('li');
+  li.textContent=e.data;
+  log.prepend(li);
+  while(log.children.length>50)log.lastChild.remove();
+};
+setInterval(()=>{
+  fetch('/report').then(r=>r.text()).then(t=>document.getElementById('report').textContent=t);
+  fetch('/metricsz').then(r=>r.text()).then(t=>document.getElementById('metrics').textContent=t);
+  fetch('/bench-latest.json').then(r=>r.text()).then(t=>document.getElementById('bench').textContent=t);
+},5000);
+</script>
+</body>
+</html>
