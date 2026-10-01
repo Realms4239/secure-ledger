@@ -59,6 +59,8 @@ type transferRequest struct {
 	FromAccount string  `json:"from_account"`
 	ToAccount   string  `json:"to_account"`
 	Amount      float64 `json:"amount"`
+	Operator    string  `json:"operator"`
+	Txid        string  `json:"txid"`
 }
 
 type transferPayload struct {
@@ -66,12 +68,32 @@ type transferPayload struct {
 	To             string  `json:"to"`
 	Amount         float64 `json:"amount"`
 	IdempotencyKey string  `json:"idempotency_key"`
+	Operator       string  `json:"operator"`
+	Txid           string  `json:"txid"`
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// operatorOf defaults the originating operator for seed simplicity; real
+// operator traffic always sets it explicitly.
+func operatorOf(op string) string {
+	if op == "" {
+		return "mvola"
+	}
+	return op
+}
+
+// txidOf defaults the operator-side transaction id; the seed/loader sets it
+// explicitly so settlement rows can join back to sagas.
+func txidOf(txid string) string {
+	if txid == "" {
+		return uuid.NewString()
+	}
+	return txid
 }
 
 func (h *TransfersHandler) reject(w http.ResponseWriter, start time.Time, subject string, code int, decision, msg string) {
@@ -122,7 +144,14 @@ func (h *TransfersHandler) handleTransfer(w http.ResponseWriter, r *http.Request
 	// ponytail: key is now mapped to sagaID before the ring write; on ErrRingFull a retry of
 	// this key gets 409 pointing at a saga that never started. Store needs Delete to roll back — add if backpressure retries matter.
 
-	payload, err := json.Marshal(transferPayload{req.FromAccount, req.ToAccount, req.Amount, key})
+	payload, err := json.Marshal(transferPayload{
+		From:           req.FromAccount,
+		To:             req.ToAccount,
+		Amount:         req.Amount,
+		IdempotencyKey: key,
+		Operator:       operatorOf(req.Operator),
+		Txid:           txidOf(req.Txid),
+	})
 	if err != nil {
 		h.reject(w, start, subject, http.StatusInternalServerError, "internal_error", "payload marshal failed")
 		return

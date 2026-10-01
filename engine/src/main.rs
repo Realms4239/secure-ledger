@@ -1,6 +1,7 @@
 mod grpc;
 mod ring;
 mod saga;
+mod settle;
 mod tail;
 mod wire;
 
@@ -70,6 +71,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             run_ring_consumer(ring_path, consumer_store)
         }
+    });
+
+    // Settlement sweep: every 5s ingest new CSVs from SETTLEMENT_DIR, match
+    // against saga snapshots, annotate steps, and rewrite the report file the
+    // gateway serves at GET /report. File-drop keeps the no-proto-change rule.
+    let sweep_store = Arc::clone(&store);
+    let settlement_dir = PathBuf::from(env_or("SETTLEMENT_DIR", "data/settlement"));
+    let report_path = PathBuf::from(env_or("REPORT_PATH", "data/match-report.json"));
+    tokio::task::spawn_blocking(move || {
+        run_settlement_sweep(settlement_dir, report_path, sweep_store)
     });
 
     // 3. gRPC status server — GrpcBridge shares the same Arc'd store as the
@@ -152,6 +163,75 @@ fn run_file_consumer(events: PathBuf, offset: PathBuf, store: Arc<Mutex<SagaStor
             Err(e) => {
                 eprintln!("engine: tail read error: {e}");
                 std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+}
+
+fn now_ns() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0)
+}
+
+fn run_settlement_sweep(dir: PathBuf, report: PathBuf, store: Arc<Mutex<SagaStore>>) {
+    let mut done: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    loop {
+        std::thread::sleep(Duration::from_secs(5));
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(_) => continue, // dir absent until first settlement drop; retry
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("csv") || !done.insert(path.clone())
+            {
+                continue;
+            }
+            let text = match std::fs::read_to_string(&path) {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("engine: settlement {} unreadable: {e}", path.display());
+                    continue;
+                }
+            };
+            let (rows, corrupt) = crate::settle::parse_csv(&text);
+            let mut guard = match store.lock() {
+                Ok(g) => g,
+                Err(_) => return, // poisoned
+            };
+            let snaps: Vec<crate::settle::SagaSnap> = guard
+                .sagas()
+                .map(|s| crate::settle::SagaSnap {
+                    saga_id: s.saga_id.clone(),
+                    txid: s.txid.clone(),
+                    amount: s.amount,
+                    updated_at_ns: s.updated_at_ns,
+                })
+                .collect();
+            let outcome = crate::settle::match_all(&snaps, &rows);
+            for (sid, note) in &outcome.notes {
+                guard.annotate(sid, note.clone());
+            }
+            let mut rep = outcome.report;
+            rep.csv_corrupt += corrupt;
+            drop(guard);
+            let doc = serde_json::json!({ "generated_at_ns": now_ns(), "report": rep });
+            if let Some(parent) = report.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            match std::fs::write(&report, serde_json::to_string_pretty(&doc).unwrap()) {
+                Ok(()) => println!(
+                    "engine: settlement {}: {} exact + {} tolerated, {}/{}/{} missing/orphan/mismatch",
+                    path.display(),
+                    rep.settled,
+                    rep.tolerated,
+                    rep.missing.len(),
+                    rep.orphan.len(),
+                    rep.mismatch.len()
+                ),
+                Err(e) => eprintln!("engine: report write failed: {e}"),
             }
         }
     }

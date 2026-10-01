@@ -215,8 +215,7 @@ func TestTransferPipeline_Table(t *testing.T) {
 	}
 }
 
-func TestTransferRejectsFractionalAmount(t *testing.T) {
-	d := setup(t)
+func TestTransferRejectsFractionalAmount(t *testing.T) {	d := setup(t)
 	tok := makeToken(t, []byte(testSecret), "alice", time.Now().Add(time.Hour))
 	rec := d.do(t, "POST", "/transfers", tok, uuid.NewString(), `{"from_account":"alice","to_account":"bob","amount":100.5}`)
 	if rec.Code != http.StatusBadRequest {
@@ -224,6 +223,27 @@ func TestTransferRejectsFractionalAmount(t *testing.T) {
 	}
 	if !strings.Contains(d.audit.String(), `"decision":"bad_request"`) {
 		t.Fatalf("audit missing bad_request: %q", d.audit.String())
+	}
+}
+
+func TestTransferPayloadCarriesOperatorTxid(t *testing.T) {
+	d := setup(t)
+	tok := makeToken(t, []byte(testSecret), "alice", time.Now().Add(time.Hour))
+	body := `{"from_account":"alice","to_account":"bob","amount":100,"operator":"orange","txid":"op-tx-1"}`
+	rec := d.do(t, "POST", "/transfers", tok, uuid.NewString(), body)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("code = %d, want 202 (body %s)", rec.Code, rec.Body.String())
+	}
+	_, _, payload, err := ipc.UnmarshalSlot(mustSlot(t, d.ring))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var p map[string]any
+	if err := json.Unmarshal(payload, &p); err != nil {
+		t.Fatal(err)
+	}
+	if p["operator"] != "orange" || p["txid"] != "op-tx-1" {
+		t.Fatalf("payload operator/txid not carried: %s", payload)
 	}
 }
 
