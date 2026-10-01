@@ -53,6 +53,16 @@ pub struct MatchOutcome {
     pub notes: Vec<(String, String)>,
 }
 
+/// Tolerance without overflow: saturating arithmetic can only push extremes
+/// further out of range (never into a false settle), and the range check
+/// avoids `abs()`, which panics on i64::MIN. Crafted i64::MAX/MIN rows land
+/// in mismatch, by construction.
+fn within_tolerance(row: &SettlementRow, s: &SagaSnap) -> bool {
+    let delta = row.amount.saturating_add(row.fee).saturating_sub(s.amount);
+    (-TOL_CENTS..=TOL_CENTS).contains(&delta)
+        && row.ts.abs_diff(s.updated_at_ns) <= SKEW_NS
+}
+
 /// Parse settlement CSV: `operator,txid,from,to,amount,fee,ts` per line.
 /// A header line starting with `operator` and blank lines are skipped;
 /// anything else malformed counts corrupt.
@@ -114,9 +124,7 @@ pub fn match_all(snaps: &[SagaSnap], rows: &[SettlementRow]) -> MatchOutcome {
                 if row.amount == s.amount {
                     report.settled += 1;
                     notes.push((s.saga_id.clone(), format!("matched:exact {}", row.txid)));
-                } else if (row.amount + row.fee - s.amount).abs() <= TOL_CENTS
-                    && row.ts.abs_diff(s.updated_at_ns) <= SKEW_NS
-                {
+                } else if within_tolerance(row, s) {
                     report.tolerated += 1;
                     notes.push((
                         s.saga_id.clone(),
@@ -188,6 +196,22 @@ mod tests {
         assert_eq!(out.report.mismatch, vec!["t3".to_string()]);
         assert_eq!(out.report.missing, vec!["s4".to_string()]);
         assert_eq!(out.notes.len(), 4); // exact, tolerance, mismatch, missing
+    }
+
+    #[test]
+    #[test]
+    fn overflow_rows_mismatch_without_panic() {
+        // Crafted extremes must classify, never panic (debug) or wrap
+        // (release) into a false settle.
+        let snaps = vec![snap("s1", "t1", 100), snap("s2", "t2", 100)];
+        let rows = vec![
+            row("t1", i64::MAX, 1),
+            row("t2", i64::MIN, -1),
+        ];
+        let out = match_all(&snaps, &rows);
+        assert_eq!(out.report.settled, 0);
+        assert_eq!(out.report.tolerated, 0);
+        assert_eq!(out.report.mismatch, vec!["t1".to_string(), "t2".to_string()]);
     }
 
     #[test]

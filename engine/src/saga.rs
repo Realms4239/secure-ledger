@@ -117,6 +117,19 @@ fn saga_id_to_string(id: &[u8; 16]) -> String {
     )
 }
 
+/// Cap on per-saga step history: a hot saga accumulates a note per event,
+/// so history keeps the latest window instead of growing without bound.
+pub const MAX_STEPS: usize = 128;
+
+impl Saga {
+    fn push_step(&mut self, note: String) {
+        self.steps.push(note);
+        if self.steps.len() > MAX_STEPS {
+            self.steps.drain(..self.steps.len() - MAX_STEPS);
+        }
+    }
+}
+
 impl SagaStore {
     /// Open store with WAL at `path`, replaying it into state.
     pub fn open(wal_path: PathBuf) -> Result<(Self, ReplayStats), StoreError> {
@@ -143,7 +156,7 @@ impl SagaStore {
             entry.state = state;
             entry.updated_at_ns = e.ts;
             if !entry.steps.contains(&format!("type_{}", e.typ)) {
-                entry.steps.push(format!("type_{}", e.typ));
+                entry.push_step(format!("type_{}", e.typ));
             }
             dedup.insert(e.idempotency_key.clone(), e.saga_id.clone());
             if !e.txid.is_empty() {
@@ -219,7 +232,7 @@ impl SagaStore {
                     SagaState::Compensating => saga.state = SagaState::Compensated,
                     SagaState::Compensated => return Ok(false), // idempotent re-fail
                 }
-                saga.steps.push(format!("type_{typ}"));
+                saga.push_step(format!("type_{typ}"));
                 saga.updated_at_ns = now_ns();
                 let entry = WalEntry {
                     saga_id: sid,
@@ -240,7 +253,7 @@ impl SagaStore {
                     .sagas
                     .get_mut(&sid)
                     .ok_or_else(|| StoreError::UnknownSaga(sid.clone()))?;
-                saga.steps.push(format!("type_{typ}"));
+                saga.push_step(format!("type_{typ}"));
                 saga.updated_at_ns = now_ns();
                 let entry = WalEntry {
                     saga_id: sid,
@@ -272,7 +285,7 @@ impl SagaStore {
     pub fn annotate(&mut self, saga_id: &str, note: String) {
         if let Some(s) = self.sagas.get_mut(saga_id) {
             if !s.steps.contains(&note) {
-                s.steps.push(note);
+                s.push_step(note);
             }
         }
     }
@@ -433,6 +446,22 @@ mod tests {
         // re-fail after compensated is idempotent no-op
         let changed = store.apply(TYPE_STEP_FAIL, &sid, b"").unwrap();
         assert!(!changed);
+        drop(store);
+        let _ = std::fs::remove_file(wal_path);
+    }
+
+    #[test]
+    fn steps_capped_at_latest_window() {
+        let wal_path = temp_wal("t5");
+        let mut store = SagaStore::open(wal_path.clone()).unwrap().0;
+        let sid = saga_id(5);
+        store.apply(TYPE_SAGA_START, &sid, &payload("key-e")).unwrap();
+        for _ in 0..150 {
+            store.apply(TYPE_STEP_OK, &sid, b"").unwrap();
+        }
+        let s = store.get(&saga_id_to_string(&sid)).unwrap();
+        assert_eq!(s.steps.len(), MAX_STEPS);
+        assert_eq!(s.steps[MAX_STEPS - 1], format!("type_{}", TYPE_STEP_OK));
         drop(store);
         let _ = std::fs::remove_file(wal_path);
     }
