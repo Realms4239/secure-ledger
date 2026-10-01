@@ -296,9 +296,15 @@ fn run_settlement_sweep(dir: PathBuf, report: PathBuf, store: Arc<Mutex<SagaStor
         for (sid, note) in &outcome.notes {
             guard.annotate(sid, note.clone());
         }
-        let mut rep = outcome.report;
-        rep.csv_corrupt += corrupt;
-        drop(guard);
+            let mut rep = outcome.report;
+            rep.csv_corrupt += corrupt;
+            drop(guard);
+            // Deterministic report bytes: saga iteration order is HashMap
+            // random per process, so sort the id lists — reports must diff
+            // cleanly across restarts (recovery drill compares them).
+            rep.missing.sort();
+            rep.orphan.sort();
+            rep.mismatch.sort();
         let doc = serde_json::json!({ "generated_at_ns": now_ns(), "report": rep });
         if let Some(parent) = report.parent() {
             let _ = std::fs::create_dir_all(parent);

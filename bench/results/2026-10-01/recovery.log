@@ -1,0 +1,4 @@
+before settled=305 tolerated=150
+replay: engine: WAL replay done in 30.1785ms (500 entries, corrupt_tail=0)
+after: identical report
+RECOVERY PASS
