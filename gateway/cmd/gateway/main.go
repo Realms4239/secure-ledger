@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"secureledger/gateway/internal/audit"
+	"secureledger/gateway/internal/fraud"
 	"secureledger/gateway/internal/handler"
 	"secureledger/gateway/internal/idempotency"
 	"secureledger/gateway/internal/ipc"
@@ -78,8 +79,17 @@ func main() {
 	}
 	defer grpcStatus.Close()
 
+	settlementDir := os.Getenv("SETTLEMENT_DIR")
+	if settlementDir == "" {
+		settlementDir = "data/settlement"
+	}
+	reportPath := os.Getenv("REPORT_PATH")
+	if reportPath == "" {
+		reportPath = "data/match-report.json"
+	}
+
 	mux := http.NewServeMux()
-	handler.NewTransfersHandler([]byte(secret), idempotency.New(), sink, audit.New(os.Stdout), grpcStatus).Register(mux)
+	handler.NewTransfersHandler([]byte(secret), idempotency.New(), sink, audit.New(os.Stdout), grpcStatus, fraud.New(), settlementDir, reportPath).Register(mux)
 
 	srv := &http.Server{Addr: gatewayAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	errCh := make(chan error, 1)

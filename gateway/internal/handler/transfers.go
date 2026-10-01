@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -15,6 +18,7 @@ import (
 
 	"secureledger/gateway/internal/audit"
 	"secureledger/gateway/internal/authn"
+	"secureledger/gateway/internal/fraud"
 	"secureledger/gateway/internal/idempotency"
 	"secureledger/gateway/internal/ipc"
 	"secureledger/gateway/internal/policy"
@@ -37,20 +41,27 @@ type TransfersHandler struct {
 	sink   ipc.Sink
 	audit  *audit.Logger
 	status StatusClient
+	fraud  *fraud.Store
+
+	settlementDir string
+	reportPath    string
 
 	ringFullTotal     atomic.Int64
 	unauthorizedTotal atomic.Int64
 	duplicateKeyTotal atomic.Int64
+	fraudHoldTotal    atomic.Int64
 }
 
-func NewTransfersHandler(secret []byte, idem *idempotency.Store, sink ipc.Sink, lg *audit.Logger, status StatusClient) *TransfersHandler {
-	return &TransfersHandler{secret: secret, idem: idem, sink: sink, audit: lg, status: status}
+func NewTransfersHandler(secret []byte, idem *idempotency.Store, sink ipc.Sink, lg *audit.Logger, status StatusClient, fr *fraud.Store, settlementDir, reportPath string) *TransfersHandler {
+	return &TransfersHandler{secret: secret, idem: idem, sink: sink, audit: lg, status: status, fraud: fr, settlementDir: settlementDir, reportPath: reportPath}
 }
 
 func (h *TransfersHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /transfers", h.handleTransfer)
 	mux.HandleFunc("POST /transfers/{id}/fail", h.handleTransferFail)
 	mux.HandleFunc("GET /sagas/{id}", h.handleSagaStatus)
+	mux.HandleFunc("POST /settlement/upload", h.handleSettlementUpload)
+	mux.HandleFunc("GET /report", h.handleReport)
 	mux.HandleFunc("GET /metricsz", h.handleMetricsz)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "ok") })
 }
@@ -130,6 +141,15 @@ func (h *TransfersHandler) handleTransfer(w http.ResponseWriter, r *http.Request
 
 	if !policy.Authorized(subject, req.FromAccount) {
 		h.reject(w, start, subject, http.StatusForbidden, "forbidden", "subject may not debit from_account")
+		return
+	}
+
+	// Fraud plugin (Project A rules v1): a hold stays out of the sink and the
+	// ledger entirely — audit + counter carry it to the review queue.
+	if held, reason := h.fraud.Check(subject, operatorOf(req.Operator), req.Amount, time.Now().Unix()); held {
+		h.fraudHoldTotal.Add(1)
+		h.audit.Log("fraud_hold", subject, "/transfers", "", key, time.Since(start).Milliseconds())
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "held_for_review", "reason": reason})
 		return
 	}
 
@@ -213,6 +233,49 @@ func (h *TransfersHandler) handleSagaStatus(w http.ResponseWriter, r *http.Reque
 
 func (h *TransfersHandler) handleMetricsz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "ring_full_total %d\nunauthorized_total %d\nduplicate_key_total %d\n",
-		h.ringFullTotal.Load(), h.unauthorizedTotal.Load(), h.duplicateKeyTotal.Load())
+	fmt.Fprintf(w, "ring_full_total %d\nunauthorized_total %d\nduplicate_key_total %d\nfraud_hold_total %d\n",
+		h.ringFullTotal.Load(), h.unauthorizedTotal.Load(), h.duplicateKeyTotal.Load(), h.fraudHoldTotal.Load())
+}
+
+// handleSettlementUpload accepts a raw operator settlement CSV and drops it
+// where the engine sweep picks it up. File-drop keeps the no-new-RPC rule:
+// the engine never trusts the gateway beyond bytes on disk.
+func (h *TransfersHandler) handleSettlementUpload(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	token, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	subject, err := authn.ValidateJWT(token, h.secret)
+	if err != nil {
+		h.unauthorizedTotal.Add(1)
+		h.reject(w, start, "", http.StatusUnauthorized, "unauthorized", "invalid or missing bearer token")
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
+	if err != nil || len(body) == 0 {
+		h.reject(w, start, subject, http.StatusBadRequest, "bad_request", "body must be raw settlement CSV")
+		return
+	}
+	if err := os.MkdirAll(h.settlementDir, 0o755); err != nil {
+		h.reject(w, start, subject, http.StatusInternalServerError, "internal_error", "settlement dir unavailable")
+		return
+	}
+	name := fmt.Sprintf("incoming-%d.csv", time.Now().UnixNano())
+	if err := os.WriteFile(filepath.Join(h.settlementDir, name), body, 0o644); err != nil {
+		h.reject(w, start, subject, http.StatusInternalServerError, "internal_error", "settlement write failed")
+		return
+	}
+	h.audit.Log("settlement_uploaded", subject, "/settlement/upload", name, "", time.Since(start).Milliseconds())
+	writeJSON(w, http.StatusAccepted, map[string]any{"file": name, "bytes": len(body)})
+}
+
+// handleReport serves the engine's latest match report verbatim. Absent file
+// means no settlement has been processed yet — not an error in the ledger.
+func (h *TransfersHandler) handleReport(w http.ResponseWriter, _ *http.Request) {
+	raw, err := os.ReadFile(h.reportPath)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no settlement processed yet"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(raw)
 }

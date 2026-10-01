@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"secureledger/gateway/internal/audit"
+	"secureledger/gateway/internal/fraud"
 	"secureledger/gateway/internal/idempotency"
 	"secureledger/gateway/internal/ipc"
 )
@@ -62,7 +64,7 @@ func setup(t *testing.T) *deps {
 	}
 	t.Cleanup(func() { ring.Close() })
 	buf := &bytes.Buffer{}
-	h := NewTransfersHandler(secret, idempotency.New(), ring, audit.New(buf), stubStatus{})
+	h := NewTransfersHandler(secret, idempotency.New(), ring, audit.New(buf), stubStatus{}, fraud.New(), t.TempDir(), filepath.Join(t.TempDir(), "report.json"))
 	mux := http.NewServeMux()
 	h.Register(mux)
 	return &deps{h: h, ring: ring, audit: buf, mux: mux}
@@ -270,7 +272,7 @@ func TestTransferRingFull503(t *testing.T) {
 		}
 	}
 	buf := &bytes.Buffer{}
-	h := NewTransfersHandler(secret, idempotency.New(), ring, audit.New(buf), stubStatus{})
+	h := NewTransfersHandler(secret, idempotency.New(), ring, audit.New(buf), stubStatus{}, fraud.New(), t.TempDir(), filepath.Join(t.TempDir(), "report.json"))
 	mux := http.NewServeMux()
 	h.Register(mux)
 
@@ -305,7 +307,7 @@ func TestGetSagaStatus(t *testing.T) {
 		}
 		t.Cleanup(func() { ring.Close() })
 		buf := &bytes.Buffer{}
-		h := NewTransfersHandler([]byte(testSecret), idempotency.New(), ring, audit.New(buf), st)
+		h := NewTransfersHandler([]byte(testSecret), idempotency.New(), ring, audit.New(buf), st, fraud.New(), t.TempDir(), filepath.Join(t.TempDir(), "report.json"))
 		mux := http.NewServeMux()
 		h.Register(mux)
 		return buf, mux
@@ -347,8 +349,91 @@ func TestMetricszCounters(t *testing.T) {
 	d.h.duplicateKeyTotal.Add(5)
 	rec := httptest.NewRecorder()
 	d.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/metricsz", nil))
-	want := "ring_full_total 2\nunauthorized_total 3\nduplicate_key_total 5\n"
+	want := "ring_full_total 2\nunauthorized_total 3\nduplicate_key_total 5\nfraud_hold_total 0\n"
 	if rec.Body.String() != want {
 		t.Fatalf("metricsz = %q, want %q", rec.Body.String(), want)
+	}
+}
+
+func TestTransferFraudHoldVelocity(t *testing.T) {
+	d := setup(t)
+	tok := makeToken(t, []byte(testSecret), "mallory", time.Now().Add(time.Hour))
+	var last *httptest.ResponseRecorder
+	for i := 0; i < 6; i++ {
+		body := `{"from_account":"mallory","to_account":"bob","amount":100}`
+		last = d.do(t, "POST", "/transfers", tok, uuid.NewString(), body)
+	}
+	if last.Code != http.StatusAccepted {
+		t.Fatalf("code = %d, want 202 (body %s)", last.Code, last.Body.String())
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(last.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["status"] != "held_for_review" || resp["reason"] != "velocity" {
+		t.Fatalf("resp = %v, want held_for_review/velocity", resp)
+	}
+	if !strings.Contains(d.audit.String(), `"decision":"fraud_hold"`) {
+		t.Fatalf("audit missing fraud_hold: %q", d.audit.String())
+	}
+}
+
+func TestSettlementUploadAndReport(t *testing.T) {
+	dir := t.TempDir()
+	secret := []byte(testSecret)
+	ring, err := ipc.NewRingWriter(filepath.Join(t.TempDir(), "s.ring"), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ring.Close() })
+	report := filepath.Join(t.TempDir(), "report.json")
+	buf := &bytes.Buffer{}
+	h := NewTransfersHandler(secret, idempotency.New(), ring, audit.New(buf), stubStatus{}, fraud.New(), dir, report)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	tok := makeToken(t, secret, "alice", time.Now().Add(time.Hour))
+
+	// report before any settlement: 404, not a ledger error
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/report", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("report code = %d, want 404", rec.Code)
+	}
+
+	// upload without auth: 401, nothing on disk
+	req := httptest.NewRequest("POST", "/settlement/upload", strings.NewReader("operator,txid\n"))
+	req.Header.Set("Idempotency-Key", uuid.NewString())
+	un := httptest.NewRecorder()
+	mux.ServeHTTP(un, req)
+	if un.Code != http.StatusUnauthorized {
+		t.Fatalf("upload code = %d, want 401", un.Code)
+	}
+
+	// authorized upload lands a file
+	csv := "operator,txid,from,to,amount,fee,ts\nmvola,t1,alice,bob,100,0,1700000000000000000\n"
+	req = httptest.NewRequest("POST", "/settlement/upload", strings.NewReader(csv))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	up := httptest.NewRecorder()
+	mux.ServeHTTP(up, req)
+	if up.Code != http.StatusAccepted {
+		t.Fatalf("upload code = %d, want 202 (body %s)", up.Code, up.Body.String())
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("settlement dir = %v, %v; want 1 file", entries, err)
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, entries[0].Name()))
+	if string(raw) != csv {
+		t.Fatalf("settlement file bytes differ: %q", raw)
+	}
+
+	// engine-written report is served verbatim
+	if err := os.WriteFile(report, []byte(`{"generated_at_ns":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := httptest.NewRecorder()
+	mux.ServeHTTP(got, httptest.NewRequest("GET", "/report", nil))
+	if got.Code != http.StatusOK || got.Body.String() != `{"generated_at_ns":1}` {
+		t.Fatalf("report = %d %q", got.Code, got.Body.String())
 	}
 }
