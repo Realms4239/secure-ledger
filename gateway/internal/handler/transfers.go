@@ -162,19 +162,8 @@ func (h *TransfersHandler) handleTransfer(w http.ResponseWriter, r *http.Request
 		h.reject(w, start, subject, http.StatusBadRequest, "bad_request", "amount must be integer minor units")
 		return
 	}
-
 	if !policy.Authorized(subject, req.FromAccount) {
 		h.reject(w, start, subject, http.StatusForbidden, "forbidden", "subject may not debit from_account")
-		return
-	}
-
-	// Fraud plugin (Project A rules v1): a hold stays out of the sink and the
-	// ledger entirely — audit + counter carry it to the review queue.
-	if held, reason := h.fraud.Check(subject, operatorOf(req.Operator), req.Amount, time.Now().Unix()); held {
-		h.fraudHoldTotal.Add(1)
-		h.audit.Log("fraud_hold", subject, "/transfers", "", key, time.Since(start).Milliseconds())
-		h.emit("held_for_review", subject, "/transfers", "", reason)
-		writeJSON(w, http.StatusAccepted, map[string]string{"status": "held_for_review", "reason": reason})
 		return
 	}
 
@@ -185,6 +174,16 @@ func (h *TransfersHandler) handleTransfer(w http.ResponseWriter, r *http.Request
 		h.audit.Log("duplicate", subject, "/transfers", existing, key, time.Since(start).Milliseconds())
 		h.emit("duplicate", subject, "/transfers", existing, key)
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "duplicate_idempotency_key", "saga_id": existing})
+		return
+	}
+	// Fraud plugin (Project A rules v1): scored after dedup so an identical
+	// retry always answers 409 instead of re-scoring. A hold stays out of the
+	// sink and the ledger entirely — audit + counter carry it to review.
+	if held, reason := h.fraud.Check(subject, operatorOf(req.Operator), req.Amount, time.Now().Unix()); held {
+		h.fraudHoldTotal.Add(1)
+		h.audit.Log("fraud_hold", subject, "/transfers", "", key, time.Since(start).Milliseconds())
+		h.emit("held_for_review", subject, "/transfers", "", reason)
+		writeJSON(w, http.StatusAccepted, map[string]string{"status": "held_for_review", "reason": reason})
 		return
 	}
 	// ponytail: key is now mapped to sagaID before the ring write; on ErrRingFull a retry of
