@@ -20,6 +20,7 @@ import (
 	"secureledger/gateway/internal/fraud"
 	"secureledger/gateway/internal/idempotency"
 	"secureledger/gateway/internal/ipc"
+	"secureledger/gateway/internal/ratelimit"
 )
 
 const testSecret = "test-secret-32-bytes-long-for-hs256"
@@ -349,7 +350,7 @@ func TestMetricszCounters(t *testing.T) {
 	d.h.duplicateKeyTotal.Add(5)
 	rec := httptest.NewRecorder()
 	d.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/metricsz", nil))
-	want := "ring_full_total 2\nunauthorized_total 3\nduplicate_key_total 5\nfraud_hold_total 0\n"
+	want := "ring_full_total 2\nunauthorized_total 3\nduplicate_key_total 5\nfraud_hold_total 0\nrate_limited_total 0\n"
 	if rec.Body.String() != want {
 		t.Fatalf("metricsz = %q, want %q", rec.Body.String(), want)
 	}
@@ -473,5 +474,68 @@ func TestChaosPartitionToggle(t *testing.T) {
 	}
 	if _, err := os.Stat(flag); !os.IsNotExist(err) {
 		t.Fatalf("flag file present after OFF")
+	}
+}
+
+func TestFailRouteOffByDefault(t *testing.T) {
+	d := setup(t) // no SetFailInject: route must not exist
+	tok := makeToken(t, []byte(testSecret), "alice", time.Now().Add(time.Hour))
+	req := httptest.NewRequest("POST", "/transfers/"+uuid.NewString()+"/fail", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+	d.mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("disabled fail route = %d, want 404", rec.Code)
+	}
+}
+
+func TestTransferRejectsHugeAmount(t *testing.T) {
+	d := setup(t)
+	tok := makeToken(t, []byte(testSecret), "alice", time.Now().Add(time.Hour))
+	rec := d.do(t, "POST", "/transfers", tok, uuid.NewString(), `{"from_account":"alice","to_account":"bob","amount":1000000000000000}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestTransferRejectsGiantBody(t *testing.T) {
+	d := setup(t)
+	tok := makeToken(t, []byte(testSecret), "alice", time.Now().Add(time.Hour))
+	big := `{"from_account":"alice","to_account":"bob","amount":100,"pad":"` + strings.Repeat("x", 2<<20) + `"}`
+	rec := d.do(t, "POST", "/transfers", tok, uuid.NewString(), big)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400 for >1MB body", rec.Code)
+	}
+}
+
+func TestRateLimiter429(t *testing.T) {
+	secret := []byte(testSecret)
+	ring, err := ipc.NewRingWriter(filepath.Join(t.TempDir(), "rl.ring"), 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ring.Close() })
+	buf := &bytes.Buffer{}
+	h := NewTransfersHandler(secret, idempotency.New(), ring, audit.New(buf), stubStatus{}, fraud.New(), t.TempDir(), filepath.Join(t.TempDir(), "report.json"))
+	h.SetRateLimiter(ratelimit.New(1, 1))
+	mux := http.NewServeMux()
+	h.Register(mux)
+	tok := makeToken(t, secret, "alice", time.Now().Add(time.Hour))
+	post := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/transfers", strings.NewReader(validBody()))
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("Idempotency-Key", uuid.NewString())
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := post(); rec.Code != http.StatusAccepted {
+		t.Fatalf("first = %d, want 202", rec.Code)
+	}
+	if rec := post(); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second = %d, want 429", rec.Code)
+	}
+	if !strings.Contains(buf.String(), `"decision":"rate_limited"`) {
+		t.Fatalf("audit missing rate_limited: %q", buf.String())
 	}
 }

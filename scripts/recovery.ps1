@@ -39,6 +39,7 @@ $gwEnv = @{
   GATEWAY_ADDR = $GwAddr; EVENTS_PATH = (Join-Path $Data "events.log")
   SETTLEMENT_DIR = (Join-Path $Data "settlement"); REPORT_PATH = (Join-Path $Data "match-report.json")
   PARTITION_FLAG = (Join-Path $Data "partition.flag")
+  RATE_LIMIT_RPS = "2000"; RATE_LIMIT_BURST = "4000"
 }
 $EngineBin = "D:/sl-target/settleledger/debug/secureledger-engine.exe"
 $eng = $null; $gw = $null

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -17,10 +18,31 @@ import (
 	"secureledger/gateway/internal/handler"
 	"secureledger/gateway/internal/idempotency"
 	"secureledger/gateway/internal/ipc"
+	"secureledger/gateway/internal/ratelimit"
 	"secureledger/gateway/internal/status"
 )
 
 const defaultRingSlots = 1 << 20 // 1M slots = 256MB, per plan
+
+func rateLimitRPS() float64 {
+	if v := os.Getenv("RATE_LIMIT_RPS"); v != "" {
+		var f float64
+		if _, err := fmt.Sscanf(v, "%f", &f); err == nil && f > 0 {
+			return f
+		}
+	}
+	return 100
+}
+
+func rateLimitBurst() int {
+	if v := os.Getenv("RATE_LIMIT_BURST"); v != "" {
+		var n int
+		if _, err := fmt.Sscanf(v, "%d", &n); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 200
+}
 
 func main() {
 	log.SetFlags(0)
@@ -34,7 +56,9 @@ func main() {
 	}
 	gatewayAddr := os.Getenv("GATEWAY_ADDR")
 	if gatewayAddr == "" {
-		gatewayAddr = ":8080"
+		// Loopback by default: privileged routes (chaos, fail-inject) are
+		// JWT-only, so never bind all interfaces without deciding to.
+		gatewayAddr = "127.0.0.1:8080"
 	}
 	transport := os.Getenv("TRANSPORT")
 	if transport == "" {
@@ -100,9 +124,21 @@ func main() {
 	transfers := handler.NewTransfersHandler([]byte(secret), idempotency.New(), sink, audit.New(os.Stdout), grpcStatus, fraud.New(), settlementDir, reportPath)
 	transfers.SetHub(hub)
 	transfers.SetPartitionFlag(partitionFlag)
+	if os.Getenv("ENABLE_FAIL_INJECT") == "1" {
+		transfers.SetFailInject(true)
+		log.Print("gateway WARNING: fail-injection route enabled (test only)")
+	}
+	transfers.SetRateLimiter(ratelimit.New(rateLimitRPS(), rateLimitBurst()))
 	transfers.Register(mux)
 
-	srv := &http.Server{Addr: gatewayAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	// No WriteTimeout: SSE streams live indefinitely. Read/Idle bound the
+	// slow-loris surface instead; per-route write deadlines are future work.
+	srv := &http.Server{
+		Addr: gatewayAddr, Handler: mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
 	log.Printf("gateway listening on %s engine=%s", gatewayAddr, engineAddr)

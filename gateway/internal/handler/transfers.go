@@ -23,6 +23,7 @@ import (
 	"secureledger/gateway/internal/idempotency"
 	"secureledger/gateway/internal/ipc"
 	"secureledger/gateway/internal/policy"
+	"secureledger/gateway/internal/ratelimit"
 )
 
 // EventTypeSagaStart is the only ring event type the gateway emits (proto/ipc-wire.md).
@@ -30,6 +31,15 @@ const (
 	EventTypeSagaStart byte = 0x01
 	EventTypeStepFail  byte = 0x03 // test-client injection only (spec §7 flow)
 )
+
+// maxAmount bounds transfers to what the engine can represent: the engine
+// parses amounts as i64, so anything larger would 202-accept a transfer that
+// can never apply. 999B minor units is far above any mobile-money ticket.
+const maxAmount = 999_999_999_999
+
+// maxBody caps JSON request bodies; the settlement CSV upload keeps its own
+// 10MB cap. Without this a single giant body can OOM the handler.
+const maxBody = 1 << 20
 
 // StatusClient proxies saga status lookups to the engine (real gRPC impl lands in Task 7).
 type StatusClient interface {
@@ -50,10 +60,14 @@ type TransfersHandler struct {
 	hub           *dash.Hub
 	partitionFlag string
 
+	limiter   *ratelimit.Limiter
+	failInject bool
+
 	ringFullTotal     atomic.Int64
 	unauthorizedTotal atomic.Int64
 	duplicateKeyTotal atomic.Int64
 	fraudHoldTotal    atomic.Int64
+	rateLimitedTotal  atomic.Int64
 }
 
 func NewTransfersHandler(secret []byte, idem *idempotency.Store, sink ipc.Sink, lg *audit.Logger, status StatusClient, fr *fraud.Store, settlementDir, reportPath string) *TransfersHandler {
@@ -61,14 +75,37 @@ func NewTransfersHandler(secret []byte, idem *idempotency.Store, sink ipc.Sink, 
 }
 
 func (h *TransfersHandler) Register(mux *http.ServeMux) {
-	mux.HandleFunc("POST /transfers", h.handleTransfer)
-	mux.HandleFunc("POST /transfers/{id}/fail", h.handleTransferFail)
-	mux.HandleFunc("GET /sagas/{id}", h.handleSagaStatus)
-	mux.HandleFunc("POST /settlement/upload", h.handleSettlementUpload)
-	mux.HandleFunc("GET /report", h.handleReport)
-	mux.HandleFunc("POST /chaos/partition", h.handleChaosPartition)
+	mux.HandleFunc("POST /transfers", h.limited(h.handleTransfer))
+	// Fail injection is a test hook: any authenticated subject could fail any
+	// saga, so the route only exists when explicitly enabled.
+	if h.failInject {
+		mux.HandleFunc("POST /transfers/{id}/fail", h.limited(h.handleTransferFail))
+	}
+	mux.HandleFunc("GET /sagas/{id}", h.limited(h.handleSagaStatus))
+	mux.HandleFunc("POST /settlement/upload", h.limited(h.handleSettlementUpload))
+	mux.HandleFunc("GET /report", h.limited(h.handleReport))
+	mux.HandleFunc("POST /chaos/partition", h.limited(h.handleChaosPartition))
 	mux.HandleFunc("GET /metricsz", h.handleMetricsz)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, "ok") })
+}
+
+// SetRateLimiter attaches the per-IP limiter; nil disables (tests).
+func (h *TransfersHandler) SetRateLimiter(l *ratelimit.Limiter) { h.limiter = l }
+
+// SetFailInject enables the test-only fail-injection route. Must be called
+// before Register; default off.
+func (h *TransfersHandler) SetFailInject(on bool) { h.failInject = on }
+
+func (h *TransfersHandler) limited(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if h.limiter != nil && !h.limiter.Allow(ratelimit.ClientIP(r.RemoteAddr)) {
+			h.rateLimitedTotal.Add(1)
+			h.audit.Log("rate_limited", "", r.URL.Path, "", "", 0)
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "rate limited"})
+			return
+		}
+		next(w, r)
+	}
 }
 
 // SetHub attaches the dashboard event hub; nil (tests, minimal runs) disables
@@ -154,12 +191,16 @@ func (h *TransfersHandler) handleTransfer(w http.ResponseWriter, r *http.Request
 	}
 
 	var req transferRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.FromAccount == "" || req.ToAccount == "" || req.Amount <= 0 {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(&req); err != nil || req.FromAccount == "" || req.ToAccount == "" || req.Amount <= 0 {
 		h.reject(w, start, subject, http.StatusBadRequest, "bad_request", "body must be {from_account,to_account,amount>0}")
 		return
 	}
 	if req.Amount != math.Trunc(req.Amount) {
 		h.reject(w, start, subject, http.StatusBadRequest, "bad_request", "amount must be integer minor units")
+		return
+	}
+	if req.Amount > maxAmount {
+		h.reject(w, start, subject, http.StatusBadRequest, "bad_request", "amount exceeds maximum")
 		return
 	}
 	if !policy.Authorized(subject, req.FromAccount) {
@@ -276,7 +317,7 @@ func (h *TransfersHandler) handleChaosPartition(w http.ResponseWriter, r *http.R
 	var req struct {
 		On bool `json:"on"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(&req); err != nil {
 		h.reject(w, start, subject, http.StatusBadRequest, "bad_request", "body must be {on:bool}")
 		return
 	}
@@ -300,8 +341,8 @@ func (h *TransfersHandler) handleChaosPartition(w http.ResponseWriter, r *http.R
 
 func (h *TransfersHandler) handleMetricsz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "ring_full_total %d\nunauthorized_total %d\nduplicate_key_total %d\nfraud_hold_total %d\n",
-		h.ringFullTotal.Load(), h.unauthorizedTotal.Load(), h.duplicateKeyTotal.Load(), h.fraudHoldTotal.Load())
+	fmt.Fprintf(w, "ring_full_total %d\nunauthorized_total %d\nduplicate_key_total %d\nfraud_hold_total %d\nrate_limited_total %d\n",
+		h.ringFullTotal.Load(), h.unauthorizedTotal.Load(), h.duplicateKeyTotal.Load(), h.fraudHoldTotal.Load(), h.rateLimitedTotal.Load())
 }
 
 // handleSettlementUpload accepts a raw operator settlement CSV and drops it
