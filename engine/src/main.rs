@@ -1,11 +1,13 @@
 mod grpc;
 mod ring;
 mod saga;
+mod tail;
 mod wire;
 
 use crate::grpc::pb::reconciliation_server::ReconciliationServer;
 use crate::grpc::pb;
 use crate::ring::RingReader;
+use crate::tail::{FileTailer, TailError};
 use crate::saga::{SagaState, SagaStore, StoreError, TYPE_COMPENSATE, TYPE_SAGA_START, TYPE_STEP_FAIL, TYPE_STEP_OK};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -19,7 +21,6 @@ fn env_or(key: &str, default: &str) -> String {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wal_path = PathBuf::from(env_or("WAL_PATH", "data/wal.log"));
-    let ring_path = PathBuf::from(env_or("RING_PATH", "/dev/shm/secureledger.ring"));
     let addr = env_or("ENGINE_ADDR", "0.0.0.0:50051");
 
     // 1. Replay WAL into saga state (RPO = last fsynced record)
@@ -46,11 +47,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let store = Arc::new(Mutex::new(store));
 
-    // 2. Ring consumer task (polls; sleeps when empty)
+    // 2. Event consumer task (polls; sleeps when empty). TRANSPORT=file is the
+    // Windows demo path (JSONL tail with persisted offset); shm is the frozen
+    // WSL2 bench path.
+    let transport = env_or("TRANSPORT", "file");
+    println!("engine: transport={transport}");
     let consumer_store = Arc::clone(&store);
-    let ring_for_consumer = ring_path.clone();
     let consumer = tokio::task::spawn_blocking(move || {
-        run_ring_consumer(ring_for_consumer, consumer_store)
+        if transport == "file" {
+            let events = PathBuf::from(
+                std::env::var("EVENTS_PATH").unwrap_or_else(|_| "data/events.log".to_string()),
+            );
+            let offset = PathBuf::from(
+                std::env::var("EVENTS_OFFSET")
+                    .unwrap_or_else(|_| "data/events.offset".to_string()),
+            );
+            run_file_consumer(events, offset, consumer_store)
+        } else {
+            let ring_path = PathBuf::from(
+                std::env::var("RING_PATH")
+                    .unwrap_or_else(|_| "/dev/shm/secureledger.ring".to_string()),
+            );
+            run_ring_consumer(ring_path, consumer_store)
+        }
     });
 
     // 3. gRPC status server — GrpcBridge shares the same Arc'd store as the
@@ -100,6 +119,40 @@ impl crate::grpc::pb::reconciliation_server::Reconciliation for GrpcBridge {
                 updated_at: saga.updated_at_ns.to_string(),
             })),
             None => Err(tonic::Status::not_found(format!("saga {id} not found"))),
+        }
+    }
+}
+
+fn run_file_consumer(events: PathBuf, offset: PathBuf, store: Arc<Mutex<SagaStore>>) {
+    let mut tail = loop {
+        match FileTailer::open(events.clone(), offset.clone()) {
+            Ok(t) => break t,
+            Err(e) => {
+                eprintln!("engine: events file not ready ({e}), retrying in 1s");
+                std::thread::sleep(Duration::from_secs(1));
+            }
+        }
+    };
+    loop {
+        match tail.next() {
+            Ok(Some(e)) => {
+                let mut guard = match store.lock() {
+                    Ok(g) => g,
+                    Err(_) => return, // poisoned
+                };
+                if let Err(e2) = guard.apply(e.typ, &e.saga_id, &e.payload) {
+                    eprintln!("engine: apply error type={:#x}: {e2}", e.typ);
+                    // consumed; keep going (same rule as ring consumer)
+                }
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(1)),
+            Err(TailError::CorruptLine(n)) => {
+                eprintln!("engine: corrupt file line {n}; skipped, offset advanced");
+            }
+            Err(e) => {
+                eprintln!("engine: tail read error: {e}");
+                std::thread::sleep(Duration::from_millis(100));
+            }
         }
     }
 }
