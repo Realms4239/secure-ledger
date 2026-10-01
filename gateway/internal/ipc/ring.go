@@ -4,13 +4,30 @@ import (
 	"encoding/binary"
 	"errors"
 	"os"
+	"reflect"
 	"sync"
 	"sync/atomic"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
-// ponytail: file-backed fallback for Windows dev; mmap on WSL2/Linux via syscall.Mmap
-// is the preferred bench path. Upgrade: add ring_unix.go with //go:build !windows
-// using syscall.Mmap when WSL2 integration runs.
+// sliceFromPtr wraps a MapViewOfFile result without a uintptr→unsafe.Pointer
+// conversion (keeps go vet unsafeptr clean). ponytail: reflect.SliceHeader is
+// deprecated; revisit if it's ever removed.
+func sliceFromPtr(addr uintptr, size uint64) []byte {
+	var b []byte
+	sh := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+	sh.Data = addr
+	sh.Len = int(size)
+	sh.Cap = int(size)
+	return b
+}
+
+// Both sides map the same file: CreateFileMapping sections are shared across
+// processes, so slot data + counters written here are visible to the Rust
+// reader's memmap2 view without flushes. (File-I/O vs mmap is NOT coherent
+// on Windows — this is why the writer must mmap too.)
 
 const headerSize = 256
 
@@ -26,12 +43,14 @@ const (
 var ErrRingFull = errors.New("ring full")
 
 type RingWriter struct {
+	section    windows.Handle
+	addr       uintptr
 	file       *os.File
+	mmap       []byte
 	capacity   uint64
 	mask       uint64
 	headerSize int64
-	head       atomic.Uint64
-	tail       atomic.Uint64
+	head       uint64 // local cached counter, authoritative value lives in mmap
 	mu         sync.Mutex
 	closed     atomic.Bool
 }
@@ -48,119 +67,97 @@ func NewRingWriter(path string, numSlots int) (*RingWriter, error) {
 		return nil, errors.New("ipc: capacity must be power-of-two")
 	}
 	hs := int64(headerSize)
-	fileSize := hs + int64(numSlots)*int64(SlotSize)
+	fileSize := uint64(hs) + uint64(numSlots)*uint64(SlotSize)
 
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		return nil, err
 	}
-	// Ensure size
-	if err := f.Truncate(fileSize); err != nil {
+	if err := f.Truncate(int64(fileSize)); err != nil {
 		f.Close()
 		return nil, err
 	}
-	hdr := make([]byte, headerSize)
-	if _, err := f.ReadAt(hdr, 0); err != nil {
+	// PAGE_READWRITE, SEC_RESERVE default; map whole file shared.
+	h, err := windows.CreateFileMapping(windows.Handle(f.Fd()), nil, windows.PAGE_READWRITE, uint32(fileSize>>32), uint32(fileSize), nil)
+	if err != nil && err != windows.ERROR_ALREADY_EXISTS {
+		f.Close()
 		return nil, err
 	}
-	magic := binary.LittleEndian.Uint32(hdr[offMagic : offMagic+4])
-	ver := binary.LittleEndian.Uint16(hdr[offVersion : offVersion+2])
-	capacityStored := binary.LittleEndian.Uint64(hdr[offCapacity : offCapacity+8])
-	headStored := binary.LittleEndian.Uint64(hdr[offHead : offHead+8])
-	tailStored := binary.LittleEndian.Uint64(hdr[offTail : offTail+8])
-
-	needInit := false
-	if magic == 0 && ver == 0 && capacityStored == 0 {
-		needInit = true
-	} else {
-		// validate existing header
-		if magic != Magic {
-			f.Close()
-			return nil, errors.New("ipc: magic mismatch")
-		}
-		if ver != Version {
-			f.Close()
-			return nil, errors.New("ipc: version mismatch")
-		}
-		if capacityStored != uint64(numSlots) {
-			f.Close()
-			return nil, errors.New("ipc: capacity mismatch")
-		}
+	addr, err := windows.MapViewOfFile(h, windows.FILE_MAP_WRITE, 0, 0, uintptr(fileSize))
+	if err != nil {
+		windows.CloseHandle(h)
+		f.Close()
+		return nil, err
 	}
+	mapAll := sliceFromPtr(addr, fileSize)
+
 	rw := &RingWriter{
+		section:    h,
+		addr:       addr,
 		file:       f,
+		mmap:       mapAll,
 		capacity:   uint64(numSlots),
 		mask:       uint64(numSlots - 1),
 		headerSize: hs,
 	}
-	if needInit {
-		// zero header (truncate already zeroed but ensure)
-		// write capacity, magic, version, head/tail zero
-		var h [headerSize]byte
-		binary.LittleEndian.PutUint64(h[offHead:], 0)
-		binary.LittleEndian.PutUint64(h[offTail:], 0)
-		binary.LittleEndian.PutUint64(h[offCapacity:], uint64(numSlots))
-		binary.LittleEndian.PutUint32(h[offMagic:], Magic)
-		binary.LittleEndian.PutUint16(h[offVersion:], Version)
-		binary.LittleEndian.PutUint16(h[offVersion+2:], 0) // reserved
-		if _, err := f.WriteAt(h[:], 0); err != nil {
-			f.Close()
-			return nil, err
-		}
-		rw.head.Store(0)
-		rw.tail.Store(0)
+
+	magic := binary.LittleEndian.Uint32(mapAll[offMagic : offMagic+4])
+	ver := binary.LittleEndian.Uint16(mapAll[offVersion : offVersion+2])
+	capStored := binary.LittleEndian.Uint64(mapAll[offCapacity : offCapacity+8])
+	if magic == 0 && ver == 0 && capStored == 0 {
+		hdr := make([]byte, headerSize)
+		binary.LittleEndian.PutUint64(hdr[offCapacity:], uint64(numSlots))
+		binary.LittleEndian.PutUint32(hdr[offMagic:], Magic)
+		binary.LittleEndian.PutUint16(hdr[offVersion:], Version)
+		copy(mapAll[:headerSize], hdr)
 	} else {
-		rw.head.Store(headStored)
-		rw.tail.Store(tailStored)
+		if magic != Magic {
+			rw.Close()
+			return nil, errors.New("ipc: magic mismatch")
+		}
+		if ver != Version {
+			rw.Close()
+			return nil, errors.New("ipc: version mismatch")
+		}
+		if capStored != uint64(numSlots) {
+			rw.Close()
+			return nil, errors.New("ipc: capacity mismatch")
+		}
 	}
+	rw.head = binary.LittleEndian.Uint64(mapAll[offHead : offHead+8])
 	return rw, nil
+}
+
+func (r *RingWriter) loadTail() uint64 {
+	return binary.LittleEndian.Uint64(r.mmap[offTail : offTail+8])
+}
+
+func (r *RingWriter) storeHead(v uint64) {
+	binary.LittleEndian.PutUint64(r.mmap[offHead:offHead+8], v)
+	r.head = v
 }
 
 func (r *RingWriter) Write(typ byte, sagaID [16]byte, payload []byte) error {
 	if r.closed.Load() {
 		return errors.New("ipc: ring closed")
 	}
-	// Honest backpressure: check head-tail >= capacity
-	// For file fallback, tail is only updated by external reader via file.
-	// Try to refresh tail from file header to see reader progress.
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// refresh tail from shared header (best-effort)
-	var tailBytes [8]byte
-	if _, err := r.file.ReadAt(tailBytes[:], offTail); err == nil {
-		tailFromFile := binary.LittleEndian.Uint64(tailBytes[:])
-		// only move forward (reader monotonic)
-		if tailFromFile > r.tail.Load() {
-			r.tail.Store(tailFromFile)
-		}
-	}
-	head := r.head.Load()
-	tail := r.tail.Load()
-	if head-tail >= r.capacity {
+	tail := r.loadTail()
+	if r.head-tail >= r.capacity {
 		return ErrRingFull
 	}
-	// also check payload size early to return marshal error before claiming slot
 	if len(payload) > PayloadMax {
 		return errors.New("ipc: payload too large")
 	}
+	slot := r.mmap[r.headerSize+(int64(r.head&r.mask))*SlotSize:]
 	buf := make([]byte, SlotSize)
 	if err := MarshalSlot(buf, typ, sagaID, payload); err != nil {
 		return err
 	}
-	idx := head & r.mask
-	offset := r.headerSize + int64(idx)*int64(SlotSize)
-	if _, err := r.file.WriteAt(buf, offset); err != nil {
-		return err
-	}
-	newHead := head + 1
-	r.head.Store(newHead)
-	var hb [8]byte
-	binary.LittleEndian.PutUint64(hb[:], newHead)
-	if _, err := r.file.WriteAt(hb[:], offHead); err != nil {
-		// ponytail: if head-persist fails after slot write, reader may consume an event the caller saw as failed; bounded by engine idempotency dedup
-		return err
-	}
+	copy(slot, buf) // slot data lands before head publish (Release semantics)
+	r.storeHead(r.head + 1)
 	return nil
 }
 
@@ -174,16 +171,31 @@ func (r *RingWriter) ReadRaw(idx uint64) ([]byte, error) {
 	defer r.mu.Unlock()
 	actual := idx & r.mask
 	offset := r.headerSize + int64(actual)*int64(SlotSize)
-	buf := make([]byte, SlotSize)
-	if _, err := r.file.ReadAt(buf, offset); err != nil {
-		return nil, err
-	}
-	return buf, nil
+	out := make([]byte, SlotSize)
+	copy(out, r.mmap[offset:offset+SlotSize])
+	return out, nil
 }
 
 func (r *RingWriter) Close() error {
 	if r.closed.Swap(true) {
 		return nil
 	}
-	return r.file.Close()
+	// Unmap before closing the file so Windows allows deletion of the ring.
+	var err error
+	if r.addr != 0 {
+		if uerr := windows.UnmapViewOfFile(r.addr); uerr != nil {
+			err = uerr
+		}
+	}
+	if r.section != 0 {
+		if cerr := windows.CloseHandle(r.section); cerr != nil && err == nil {
+			err = cerr
+		}
+	}
+	r.addr = 0
+	r.section = 0
+	if cerr := r.file.Close(); cerr != nil && err == nil {
+		err = cerr
+	}
+	return err
 }

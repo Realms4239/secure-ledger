@@ -30,6 +30,10 @@ func main() {
 	if engineAddr == "" {
 		engineAddr = "localhost:50051"
 	}
+	gatewayAddr := os.Getenv("GATEWAY_ADDR")
+	if gatewayAddr == "" {
+		gatewayAddr = ":8080"
+	}
 	ringPath := os.Getenv("RING_PATH")
 	if ringPath == "" {
 		// ponytail: Windows dev has no /dev/shm — fall back to temp dir; WSL2/Linux keeps the shm bench path
@@ -54,10 +58,10 @@ func main() {
 	mux := http.NewServeMux()
 	handler.NewTransfersHandler([]byte(secret), idempotency.New(), ring, audit.New(os.Stdout), grpcStatus).Register(mux)
 
-	srv := &http.Server{Addr: ":8080", Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: gatewayAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
-	log.Printf("gateway listening on :8080 engine=%s ring=%s", engineAddr, ringPath)
+	log.Printf("gateway listening on %s engine=%s ring=%s", gatewayAddr, engineAddr, ringPath)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
