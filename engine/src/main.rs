@@ -1,4 +1,5 @@
 mod grpc;
+mod pg;
 mod ring;
 mod saga;
 mod settle;
@@ -81,6 +82,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let report_path = PathBuf::from(env_or("REPORT_PATH", "data/match-report.json"));
     tokio::task::spawn_blocking(move || {
         run_settlement_sweep(settlement_dir, report_path, sweep_store)
+    });
+
+    // Postgres mirror: queryable truth behind the WAL. Empty DATABASE_URL
+    // skips PG entirely; unreachable PG degrades (WAL truth keeps serving)
+    // with reconnect retries and full backfill on success (AP-explicit).
+    let pg_store = Arc::clone(&store);
+    let pg_url = env_or("DATABASE_URL", "");
+    tokio::spawn(async move {
+        if pg_url.is_empty() {
+            println!("engine: pg disabled (DATABASE_URL unset)");
+            return;
+        }
+        loop {
+            match crate::pg::PgSink::connect(&pg_url).await {
+                Ok((sink, _conn)) => {
+                    if let Err(e) = sink.ensure_schema().await {
+                        eprintln!("engine: pg degraded (schema: {e}); retry in 10s");
+                        tokio::time::sleep(Duration::from_secs(10)).await;
+                        continue;
+                    }
+                    println!("engine: pg mirror live");
+                    loop {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        let snaps: Vec<crate::saga::Saga> = match pg_store.lock() {
+                            Ok(g) => g.sagas().cloned().collect(),
+                            Err(_) => return, // poisoned
+                        };
+                        let mut failed = 0u32;
+                        for s in &snaps {
+                            if sink.upsert_saga(s).await.is_err() {
+                                failed += 1;
+                                break;
+                            }
+                        }
+                        if failed > 0 {
+                            eprintln!("engine: pg degraded (write failed); reconnecting");
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("engine: pg degraded (connect: {e}); retry in 10s");
+                    tokio::time::sleep(Duration::from_secs(10)).await;
+                }
+            }
+        }
     });
 
     // 3. gRPC status server — GrpcBridge shares the same Arc'd store as the
