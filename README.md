@@ -1,4 +1,14 @@
-# Secure Ledger — Settlement Reconciliation Showcase
+# Secure Ledger
+
+[![CI](https://github.com/Realms4239/secure-ledger/actions/workflows/ci.yml/badge.svg)](https://github.com/Realms4239/secure-ledger/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](LICENSE-MIT)
+[![Live demo](https://img.shields.io/badge/demo-GitHub%20Pages-7dd3fc)](https://realms4239.github.io/secure-ledger/)
+
+Cross-operator mobile-money settlement reconciliation, demonstrated live.
+A Go gateway takes transfers in; a Rust engine settles them against operator
+files with deterministic replay. Watch it happen on the
+[live dashboard](https://realms4239.github.io/secure-ledger/) (recorded snapshot)
+or run the 5-minute demo below for the real thing.
 
 > **Experimental prototype / reference architecture / simulation tool.** Not for production
 > financial transactions. Not independently audited for security/compliance/correctness.
@@ -57,3 +67,15 @@ See `proto/ipc-wire.md` for the normative wire contract and `proto/README.md` fo
 `TRANSPORT=file` (default): JSONL append + tail with persisted offset.
 Windows-native; same event schema as the ring; offset = replay position.
 `TRANSPORT=shm`: the frozen WSL2 bench path (`/dev/shm/secureledger.ring`).
+
+## Docs
+
+- [Architecture](docs/architecture.md) — components, guarantees, data flow
+- [Enterprise integration](docs/integration.md) — sidecar, outbox, SFTP story
+- [Limitations](docs/limitations.md) — ceilings, not bugs
+- [Contributing](CONTRIBUTING.md) — spec → plan → green builds
+- [Security](SECURITY.md) — what is enforced, how to report
+
+## License
+
+Dual-licensed under [MIT](LICENSE-MIT) or [Apache 2.0](LICENSE-APACHE), your choice.

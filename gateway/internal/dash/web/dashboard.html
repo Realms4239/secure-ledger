@@ -61,6 +61,8 @@ button.danger:focus-visible{outline:2px solid var(--bad); outline-offset:2px}
 .grid{display:grid; grid-template-columns:1fr 1fr; gap:16px}
 @media (max-width:760px){.grid{grid-template-columns:1fr}}
 .muted{color:var(--faint); font-size:13px}
+#demobanner{background:#171207; border:1px solid #4a3a17; border-radius:8px;
+  padding:10px 14px; color:var(--warn); font-size:14px}
 a{color:var(--signal)}
 </style>
 </head>
@@ -70,6 +72,7 @@ a{color:var(--signal)}
 <header>
 <h1><span class="live-dot" aria-hidden="true"></span>SettleLedger</h1>
 <p>Cross-operator settlement, reconciling live. Simulated MVola / Orange / Airtel traffic.</p>
+<p id="demobanner" hidden>Recorded snapshot from 2026-10-01 — intake, lookup and drills need a live backend. <a href="https://github.com/Realms4239/secure-ledger">Run it locally</a>.</p>
 </header>
 
 <section aria-label="Live intake">
@@ -126,6 +129,10 @@ with the same environment, and compare the settlement report before and after.
 </main>
 
 <script>
+// DEMO mode: on GitHub Pages there is no live backend, so panels read the
+// bundled recorded snapshot instead. Anything needing a live gateway says so.
+const DEMO = /\.github\.io$/.test(location.hostname);
+if(DEMO){ document.getElementById('demobanner').hidden = false; }
 const log = document.getElementById('log');
 let firstEvent = true;
 function addRow(kind, text){
@@ -148,9 +155,13 @@ function kindOf(e){
     return 'info';
   }catch(_){ return 'info'; }
 }
-const es = new EventSource('/events/stream');
-es.onmessage = e => addRow(kindOf(e.data), e.data);
-es.onerror = () => addRow('error', 'stream dropped — retrying');
+if(DEMO){
+  addRow('info', 'Recorded snapshot — run locally for the live stream.');
+} else {
+  const es = new EventSource('/events/stream');
+  es.onmessage = e => addRow(kindOf(e.data), e.data);
+  es.onerror = () => addRow('error', 'stream dropped — retrying');
+}
 function text(url, el, empty){
   fetch(url).then(r => {
     if(!r.ok) throw new Error(String(r.status));
@@ -159,16 +170,24 @@ function text(url, el, empty){
     .catch(() => { document.getElementById(el).textContent = empty; });
 }
 function refresh(){
-  text('/report', 'report', 'No settlement processed yet.');
-  text('/metricsz', 'metrics', 'Gateway unreachable.');
-  text('/bench-latest.json', 'bench', 'No measurements recorded.');
+  text(DEMO ? 'report.json' : '/report', 'report', 'No settlement processed yet.');
+  text(DEMO ? 'metrics.txt' : '/metricsz', 'metrics', 'Gateway unreachable.');
+  text(DEMO ? 'bench.json' : '/bench-latest.json', 'bench', 'No measurements recorded.');
 }
 document.getElementById('lookupBtn').addEventListener('click', () => {
+  if(DEMO){
+    document.getElementById('saga').textContent = 'Lookup needs a live backend — run the demo locally.';
+    return;
+  }
   const id = document.getElementById('sagaid').value.trim();
   if(!id) return;
   text('/sagas/' + encodeURIComponent(id), 'saga', 'Lookup failed — is the engine up?');
 });
 function chaos(on){
+  if(DEMO){
+    addRow('info', 'Drills need a live backend — run the demo locally.');
+    return;
+  }
   const tok = document.getElementById('chaostoken').value.trim();
   fetch('/chaos/partition', {method:'POST',
     headers:{'Content-Type':'application/json','Authorization':'Bearer '+tok},
