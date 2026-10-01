@@ -4,9 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SettleLedger — live settlement</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0d12'/%3E%3Ccircle cx='9' cy='16' r='3' fill='none' stroke='%237dd3fc' stroke-width='2'/%3E%3Ccircle cx='23' cy='9' r='3' fill='none' stroke='%237dd3fc' stroke-width='2'/%3E%3Ccircle cx='23' cy='23' r='3' fill='%233fd08c' stroke-width='2'/%3E%3Cpath d='M12 16h5m0 0-2-2m2 2-2 2M17 13l3-2m-3 8 3 2' stroke='%237dd3fc' stroke-width='1.6' fill='none'/%3E%3C/svg%3E">
 <style>
 :root{
-  --ground:#0a0d12; --panel:#10141b; --seam:#222a36;
+  --ground:#0a0d12; --panel:#10141b; --inset:#0d1117; --seam:#222a36;
   --ink:#d8dee8; --dim:#8f99a8; --faint:#5b6472;
   --signal:#7dd3fc; --ok:#3fd08c; --warn:#e0a63c; --bad:#e06565;
 }
@@ -22,16 +23,39 @@ body{
     radial-gradient(1px 1px at 52% 42%, #ffffff0a 50%, transparent 51%);
 }
 main{max-width:1020px; margin:0 auto; padding:32px 20px 64px}
-header{margin:8px 0 28px}
-header h1{font-size:28px; margin:0 0 6px; letter-spacing:-0.01em}
-header p{margin:0; color:var(--dim); font-size:15px}
+header.brand{display:flex; align-items:center; gap:14px; margin:8px 0 6px}
+header.brand svg{flex:none}
+header.brand h1{font-size:26px; margin:0; letter-spacing:0.14em; font-weight:700}
+header.brand h1 span{color:var(--signal)}
+.sub{margin:0 0 28px; color:var(--dim); font-size:15px}
 .live-dot{display:inline-block; width:8px; height:8px; border-radius:50%;
   background:var(--signal); margin-right:8px}
 section{background:var(--panel); border:1px solid var(--seam); border-radius:10px;
   padding:18px 20px 20px; margin:0 0 16px}
 section h2{font-size:12px; text-transform:uppercase; letter-spacing:0.12em;
-  color:var(--dim); margin:0 0 14px; font-weight:600}
-section h2{margin-top:2px}
+  color:var(--dim); margin:2px 0 14px; font-weight:600}
+#summary{display:grid; grid-template-columns:repeat(6,1fr); gap:0;
+  border:1px solid var(--seam); border-radius:8px; overflow:hidden; margin-bottom:14px}
+#summary div{padding:10px 12px; border-left:1px solid var(--seam)}
+#summary div:first-child{border-left:none}
+#summary b{display:block; font-size:22px; font-weight:600;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+#summary span{font-size:11px; text-transform:uppercase; letter-spacing:0.1em; color:var(--dim)}
+.s-ok b{color:var(--ok)} .s-warn b{color:var(--warn)} .s-bad b{color:var(--bad)}
+@media (max-width:760px){#summary{grid-template-columns:repeat(3,1fr)}
+  #summary div:nth-child(4){border-left:none}
+  #summary div:nth-child(n+4){border-top:1px solid var(--seam)}}
+#disc-lists{display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; margin-top:14px}
+@media (max-width:760px){#disc-lists{grid-template-columns:1fr}}
+#disc-lists h3{font-size:11px; text-transform:uppercase; letter-spacing:0.1em;
+  color:var(--dim); margin:0 0 8px; font-weight:600}
+#disc-lists ul{list-style:none; margin:0; padding:0; max-height:180px; overflow-y:auto;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12px}
+#disc-lists li{padding:3px 0; border-bottom:1px dotted #1d242f; overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap}
+#disc-lists button{background:none; border:none; padding:0; color:var(--signal);
+  font:inherit; cursor:pointer; text-align:left}
+#disc-lists button:hover{text-decoration:underline}
 #log{list-style:none; margin:0; padding:0; max-height:320px; overflow-y:auto;
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:13px}
 #log li{padding:3px 0; border-bottom:1px dotted #1d242f; color:var(--ink);
@@ -40,11 +64,13 @@ section h2{margin-top:2px}
 #log li .k-bad{color:var(--bad)} #log li .k-info{color:var(--signal)}
 @keyframes arrive{from{opacity:0; transform:translateY(-4px)}to{opacity:1; transform:none}}
 @media (prefers-reduced-motion:reduce){#log li{animation:none}}
-pre{background:#0d1117; border:1px solid var(--seam); border-radius:8px;
+pre{background:var(--inset); border:1px solid var(--seam); border-radius:8px;
   padding:12px 14px; overflow-x:auto; font-size:13px; margin:0;
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+details{margin-top:12px}
+details summary{cursor:pointer; color:var(--dim); font-size:13px}
 .row{display:flex; gap:10px; margin-bottom:12px}
-input[type=text]{flex:1; background:#0d1117; border:1px solid var(--seam);
+input[type=text]{flex:1; background:var(--inset); border:1px solid var(--seam);
   border-radius:8px; color:var(--ink); padding:9px 12px; font-size:14px;
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 input[type=text]:focus{outline:2px solid var(--signal); outline-offset:1px; border-color:transparent}
@@ -52,6 +78,13 @@ button{background:transparent; border:1px solid #3a4453; color:var(--ink);
   border-radius:8px; padding:9px 16px; font-size:14px; cursor:pointer}
 button:hover{border-color:var(--signal)}
 button:focus-visible{outline:2px solid var(--signal); outline-offset:2px}
+button[aria-pressed=true]{border-color:var(--signal); color:var(--signal)}
+.bar-row{display:grid; grid-template-columns:52px 1fr 110px; gap:10px;
+  align-items:center; margin:8px 0; font-size:13px}
+.bar-row .lbl{color:var(--dim); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.bar-track{background:var(--inset); border:1px solid var(--seam); border-radius:5px; height:14px}
+.bar-fill{background:var(--signal); border-radius:4px; height:100%; width:0}
+.bar-row .val{text-align:right; font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
 .chaos{margin-top:28px}
 .chaos .danger-zone{margin-top:18px; padding-top:18px; border-top:1px solid var(--seam)}
 .chaos p{color:var(--dim); font-size:14px; margin:8px 0}
@@ -62,22 +95,26 @@ button.danger:focus-visible{outline:2px solid var(--bad); outline-offset:2px}
 @media (max-width:760px){.grid{grid-template-columns:1fr}}
 .muted{color:var(--faint); font-size:13px}
 #demobanner{background:#171207; border:1px solid #4a3a17; border-radius:8px;
-  padding:10px 14px; color:var(--warn); font-size:14px}
+  padding:10px 14px; color:var(--warn); font-size:14px; margin:0 0 16px}
+footer{margin-top:32px; color:var(--faint); font-size:13px; display:flex;
+  justify-content:space-between; gap:12px; flex-wrap:wrap}
 a{color:var(--signal)}
 </style>
 </head>
 <body>
-<!-- THESIS: a settlement engineer's night console — intake streams, states resolve, discrepancies queue, recovery is shown. Refuses the card-grid marketing page. OWN-WORLD: near-black graphite, hairline seams, small-caps headers, mono figures, one signal cyan + state colors on text only. STORY: a reviewer sees within 30s that transfers settle, exceptions surface, and kill-9 changes nothing. FIRST VIEWPORT: title + live intake stream + saga lookup, then report/metrics/bench, chaos isolated at the end. FORM: dark-first dev console fused with observatory readouts (seed aa894d5e). FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md. -->
+<!-- THESIS: a settlement engineer's night console — intake streams, states resolve, discrepancies queue, recovery is shown. Refuses the card-grid marketing page. OWN-WORLD: near-black graphite, hairline seams, small-caps headers, mono figures, one signal cyan + state colors on text only. STORY: a reviewer sees within 30s that transfers settle, exceptions surface, and kill-9 changes nothing. FIRST VIEWPORT: brand lockup + live intake stream + saga lookup, then report summary with discrepancy browser, metrics, bench chart, chaos isolated at the end. FORM: dark-first dev console fused with observatory readouts (seed aa894d5e). FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md. -->
 <main>
-<header>
-<h1><span class="live-dot" aria-hidden="true"></span>SettleLedger</h1>
-<p>Cross-operator settlement, reconciling live. Simulated MVola / Orange / Airtel traffic.</p>
-<p id="demobanner" hidden>Recorded snapshot from 2026-10-01 — intake, lookup and drills need a live backend. <a href="https://github.com/Realms4239/secure-ledger">Run it locally</a>.</p>
+<header class="brand">
+<svg width="34" height="34" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#10141b" stroke="#222a36"/><circle cx="9" cy="16" r="3" fill="none" stroke="#7dd3fc" stroke-width="2"/><circle cx="23" cy="9" r="3" fill="none" stroke="#7dd3fc" stroke-width="2"/><circle cx="23" cy="23" r="3" fill="#3fd08c" stroke-width="2"/><path d="M12 16h5m0 0-2-2m2 2-2 2M17 13l3-2m-3 8 3 2" stroke="#7dd3fc" stroke-width="1.6" fill="none"/></svg>
+<h1>SETTLE<span>LEDGER</span></h1>
 </header>
+<p class="sub"><span class="live-dot" aria-hidden="true"></span>Cross-operator settlement, reconciling live. Simulated MVola / Orange / Airtel traffic.</p>
+<p id="demobanner" hidden>Recorded snapshot from 2026-10-01. Intake, lookup and drills need a live backend. <a href="https://github.com/Realms4239/secure-ledger">Run it locally</a>.</p>
 
 <section aria-label="Live intake">
 <h2>Intake</h2>
 <ul id="log"><li class="muted">Waiting for transfers…</li></ul>
+<div class="row" style="margin:12px 0 0"><button id="pauseBtn" aria-pressed="false">Pause stream</button></div>
 </section>
 
 <section aria-label="Saga lookup">
@@ -89,22 +126,36 @@ a{color:var(--signal)}
 <pre id="saga">Enter an id to see its state and match notes.</pre>
 </section>
 
-<div class="grid">
 <section aria-label="Settlement report">
 <h2>Settlement report</h2>
-<pre id="report">No settlement processed yet.</pre>
+<div id="summary" role="status" aria-label="Match totals">
+<div class="s-ok"><b id="c-settled">–</b><span>settled</span></div>
+<div class="s-ok"><b id="c-tolerated">–</b><span>tolerated</span></div>
+<div class="s-warn"><b id="c-missing">–</b><span>missing</span></div>
+<div class="s-warn"><b id="c-orphan">–</b><span>orphan</span></div>
+<div class="s-bad"><b id="c-mismatch">–</b><span>mismatch</span></div>
+<div class="s-bad"><b id="c-corrupt">–</b><span>corrupt rows</span></div>
+</div>
+<div id="disc-lists">
+<div><h3>Missing: transfers without a row</h3><ul id="l-missing"><li class="muted">—</li></ul></div>
+<div><h3>Orphan: rows without a transfer</h3><ul id="l-orphan"><li class="muted">—</li></ul></div>
+<div><h3>Mismatch: amounts disagree</h3><ul id="l-mismatch"><li class="muted">—</li></ul></div>
+</div>
+<details><summary>Raw report JSON</summary><pre id="report">No settlement processed yet.</pre></details>
 </section>
 
+<div class="grid">
 <section aria-label="Gateway metrics">
 <h2>Gateway</h2>
 <pre id="metrics">Loading…</pre>
 </section>
-</div>
 
 <section aria-label="Last measured bench">
 <h2>Measured performance</h2>
-<pre id="bench">Loading…</pre>
+<div id="benchbars"><p class="muted">Loading…</p></div>
+<pre id="benchmeta" class="muted">—</pre>
 </section>
+</div>
 
 <section class="chaos" aria-label="Chaos drills">
 <h2>Drills</h2>
@@ -120,12 +171,17 @@ Paste an operator JWT first (mint one with <code>loader -token</code>).</p>
 <p>Kill-9 drill runs outside the browser: stop the engine process, restart it,
 then look a saga up again. States return from the write-ahead log.
 Scripted in <code>scripts/recovery.ps1</code>.</p>
-<button id="killBtn" class="danger" onclick="document.getElementById('killnote').hidden=false">How to run the kill-9 drill</button>
+<button id="killBtn" class="danger">How to run the kill-9 drill</button>
 <p id="killnote" hidden>Stop the engine process (kill -9 / Stop-Process -Force), start it again
 with the same environment, and compare the settlement report before and after.
 <code>scripts/recovery.ps1</code> does this and fails if one byte differs.</p>
 </div>
 </section>
+
+<footer>
+<span>SettleLedger — experimental prototype. <a href="https://github.com/Realms4239/secure-ledger">Source</a> · <a href="https://github.com/Realms4239/secure-ledger/blob/main/docs/limitations.md">Limitations</a></span>
+<span>Every number here is measured or labeled unmeasured.</span>
+</footer>
 </main>
 
 <script>
@@ -134,7 +190,7 @@ with the same environment, and compare the settlement report before and after.
 const DEMO = /\.github\.io$/.test(location.hostname);
 if(DEMO){ document.getElementById('demobanner').hidden = false; }
 const log = document.getElementById('log');
-let firstEvent = true;
+let firstEvent = true, streamOn = true, es = null;
 function addRow(kind, text){
   if(firstEvent){ log.replaceChildren(); firstEvent=false; }
   const li = document.createElement('li');
@@ -155,33 +211,125 @@ function kindOf(e){
     return 'info';
   }catch(_){ return 'info'; }
 }
+function connectStream(){
+  if(DEMO || !streamOn) return;
+  es = new EventSource('/events/stream');
+  es.onmessage = e => addRow(kindOf(e.data), e.data);
+  es.onerror = () => addRow('error', 'stream dropped, retrying');
+}
 if(DEMO){
   addRow('info', 'Recorded snapshot — run locally for the live stream.');
 } else {
-  const es = new EventSource('/events/stream');
-  es.onmessage = e => addRow(kindOf(e.data), e.data);
-  es.onerror = () => addRow('error', 'stream dropped — retrying');
+  connectStream();
 }
+document.getElementById('pauseBtn').addEventListener('click', function(){
+  streamOn = !streamOn;
+  this.textContent = streamOn ? 'Pause stream' : 'Resume stream';
+  this.setAttribute('aria-pressed', String(!streamOn));
+  if(es){ es.close(); es = null; }
+  if(streamOn && !DEMO) connectStream();
+  else if(!streamOn) addRow('info', 'Stream paused (display only — intake continues).');
+});
+function setText(id, s){ document.getElementById(id).textContent = s; }
 function text(url, el, empty){
   fetch(url).then(r => {
     if(!r.ok) throw new Error(String(r.status));
     return r.text();
-  }).then(t => { document.getElementById(el).textContent = t; })
-    .catch(() => { document.getElementById(el).textContent = empty; });
+  }).then(t => { setText(el, t); return t; })
+    .catch(() => { setText(el, empty); return null; });
+}
+function renderReport(t){
+  let o;
+  try{ o = JSON.parse(t).report || JSON.parse(t); }catch(_){ return; }
+  const r = o.report || o;
+  const num = (el, v) => setText(el, String(v == null ? '–' : v));
+  num('c-settled', r.settled); num('c-tolerated', r.tolerated);
+  num('c-corrupt', r.csv_corrupt);
+  fillList('l-missing', r.missing, true);
+  fillList('l-orphan', r.orphan, false);
+  fillList('l-mismatch', r.mismatch, false);
+}
+function fillList(id, items, lookups){
+  const ul = document.getElementById(id);
+  ul.replaceChildren();
+  if(!items || !items.length){ return; }
+  items.slice(0, 100).forEach(v => {
+    const li = document.createElement('li');
+    if(lookups){
+      const b = document.createElement('button');
+      b.textContent = v;
+      b.setAttribute('aria-label', 'Look up saga ' + v);
+      b.addEventListener('click', () => {
+        document.getElementById('sagaid').value = v;
+        document.getElementById('lookupBtn').click();
+      });
+      li.appendChild(b);
+    } else {
+      li.textContent = v;
+    }
+    ul.appendChild(li);
+  });
+}
+function renderBench(t){
+  let o;
+  try{ o = JSON.parse(t); }catch(_){ return; }
+  if(!o.measured){
+    document.getElementById('benchbars').innerHTML = '<p class="muted">No measurements recorded yet.</p>';
+    setText('benchmeta', o.note || '');
+    return;
+  }
+  const rows = [['p50', o.p50_ms], ['p95', o.p95_ms], ['p99', o.p99_ms]];
+  const max = Math.max(o.p50_ms, o.p95_ms, o.p99_ms, 1);
+  const host = document.getElementById('benchbars');
+  host.replaceChildren();
+  rows.forEach(([k, v]) => {
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+    const lbl = document.createElement('span');
+    lbl.className = 'lbl'; lbl.textContent = k;
+    const track = document.createElement('div');
+    track.className = 'bar-track';
+    const fill = document.createElement('div');
+    fill.className = 'bar-fill';
+    fill.style.width = (100 * v / max).toFixed(1) + '%';
+    track.appendChild(fill);
+    const val = document.createElement('span');
+    val.className = 'val'; val.textContent = v + ' ms';
+    row.appendChild(lbl); row.appendChild(track); row.appendChild(val);
+    host.appendChild(row);
+  });
+  setText('benchmeta', (o.date || '') + ' · ' + (o.hardware || '') + ' · ' + (o.rps || '') + ' rps · ' + (o.match || ''));
 }
 function refresh(){
-  text(DEMO ? 'report.json' : '/report', 'report', 'No settlement processed yet.');
+  const rp = DEMO ? 'report.json' : '/report';
+  fetch(rp).then(r => {
+    if(!r.ok) throw new Error(String(r.status));
+    return r.text();
+  }).then(t => { setText('report', t); renderReport(t); })
+    .catch(() => { setText('report', 'No settlement processed yet.'); });
   text(DEMO ? 'metrics.txt' : '/metricsz', 'metrics', 'Gateway unreachable.');
-  text(DEMO ? 'bench.json' : '/bench-latest.json', 'bench', 'No measurements recorded.');
+  const bp = DEMO ? 'bench.json' : '/bench-latest.json';
+  fetch(bp).then(r => {
+    if(!r.ok) throw new Error(String(r.status));
+    return r.text();
+  }).then(t => renderBench(t))
+    .catch(() => { setText('benchmeta', 'No measurements recorded.'); });
 }
-document.getElementById('lookupBtn').addEventListener('click', () => {
+function doLookup(){
   if(DEMO){
-    document.getElementById('saga').textContent = 'Lookup needs a live backend — run the demo locally.';
+    setText('saga', 'Lookup needs a live backend — run the demo locally.');
     return;
   }
   const id = document.getElementById('sagaid').value.trim();
   if(!id) return;
   text('/sagas/' + encodeURIComponent(id), 'saga', 'Lookup failed — is the engine up?');
+}
+document.getElementById('lookupBtn').addEventListener('click', doLookup);
+document.getElementById('sagaid').addEventListener('keydown', e => {
+  if(e.key === 'Enter') doLookup();
+});
+document.getElementById('killBtn').addEventListener('click', () => {
+  document.getElementById('killnote').hidden = false;
 });
 function chaos(on){
   if(DEMO){
