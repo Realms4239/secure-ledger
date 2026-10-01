@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"secureledger/gateway/internal/audit"
+	"secureledger/gateway/internal/dash"
 	"secureledger/gateway/internal/fraud"
 	"secureledger/gateway/internal/idempotency"
 	"secureledger/gateway/internal/ipc"
@@ -474,6 +475,38 @@ func TestChaosPartitionToggle(t *testing.T) {
 	}
 	if _, err := os.Stat(flag); !os.IsNotExist(err) {
 		t.Fatalf("flag file present after OFF")
+	}
+}
+
+func TestAcceptedLaneEventCarriesLaneFields(t *testing.T) {
+	d := setup(t)
+	hub := dash.NewHub()
+	d.h.SetHub(hub)
+	tok := makeToken(t, []byte(testSecret), "alice", time.Now().Add(time.Hour))
+	body := `{"from_account":"alice","to_account":"bob","amount":4200,"operator":"airtel","txid":"tx-abc"}`
+	if rec := d.do(t, "POST", "/transfers", tok, uuid.NewString(), body); rec.Code != http.StatusAccepted {
+		t.Fatalf("code = %d, want 202 (%s)", rec.Code, rec.Body.String())
+	}
+	ch, unsub := hub.Subscribe()
+	defer unsub()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case e := <-ch:
+			if !strings.Contains(e, `"kind":"accepted"`) {
+				continue
+			}
+			var v map[string]any
+			if err := json.Unmarshal([]byte(e), &v); err != nil {
+				t.Fatal(err)
+			}
+			if v["operator"] != "airtel" || v["txid"] != "tx-abc" || v["amount"].(float64) != 4200 {
+				t.Fatalf("lane event = %s", e)
+			}
+			return
+		case <-deadline:
+			t.Fatal("no accepted lane event")
+		}
 	}
 }
 

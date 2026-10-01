@@ -116,6 +116,19 @@ func (h *TransfersHandler) SetHub(hub *dash.Hub) { h.hub = hub }
 // partition (engine pauses intake, catch-up replay on removal).
 func (h *TransfersHandler) SetPartitionFlag(path string) { h.partitionFlag = path }
 
+// emitTransfer publishes a lane event: everything the dashboard needs to
+// draw one moving chip, nothing more. Nil-hub is a no-op by design.
+func (h *TransfersHandler) emitTransfer(operator, txid string, amount float64, sagaID string) {
+	if h.hub == nil {
+		return
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"kind": "accepted", "operator": operator, "txid": txid,
+		"amount": amount, "saga_id": sagaID,
+	})
+	h.hub.Publish(string(raw))
+}
+
 // emit publishes a dashboard event; nil-hub is a no-op by design.
 func (h *TransfersHandler) emit(kind, subject, route, sagaID, detail string) {
 	if h.hub == nil {
@@ -230,13 +243,16 @@ func (h *TransfersHandler) handleTransfer(w http.ResponseWriter, r *http.Request
 	// ponytail: key is now mapped to sagaID before the ring write; on ErrRingFull a retry of
 	// this key gets 409 pointing at a saga that never started. Store needs Delete to roll back — add if backpressure retries matter.
 
+	// Resolve once: the payload and the lane event must carry the same ids.
+	operator := operatorOf(req.Operator)
+	txid := txidOf(req.Txid)
 	payload, err := json.Marshal(transferPayload{
 		From:           req.FromAccount,
 		To:             req.ToAccount,
 		Amount:         req.Amount,
 		IdempotencyKey: key,
-		Operator:       operatorOf(req.Operator),
-		Txid:           txidOf(req.Txid),
+		Operator:       operator,
+		Txid:           txid,
 	})
 	if err != nil {
 		h.reject(w, start, subject, http.StatusInternalServerError, "internal_error", "payload marshal failed")
@@ -253,7 +269,7 @@ func (h *TransfersHandler) handleTransfer(w http.ResponseWriter, r *http.Request
 	}
 
 	h.audit.Log("accepted", subject, "/transfers", sagaID.String(), key, time.Since(start).Milliseconds())
-	h.emit("accepted", subject, "/transfers", sagaID.String(), operatorOf(req.Operator))
+	h.emitTransfer(operator, txid, req.Amount, sagaID.String())
 	writeJSON(w, http.StatusAccepted, map[string]string{"saga_id": sagaID.String(), "status": "accepted"})
 }
 
