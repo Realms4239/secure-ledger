@@ -1,0 +1,5 @@
+ring_full_total 0
+unauthorized_total 0
+duplicate_key_total 0
+fraud_hold_total 0
+rate_limited_total 0
