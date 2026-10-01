@@ -19,7 +19,7 @@ func TestDashboardServes(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<title>SettleLedger") {
 		t.Fatalf("dashboard = %d, want 200 with title", rec.Code)
 	}
-	for _, marker := range []string{`rel="icon"`, `id="summary"`, `id="l-mismatch"`, `id="benchbars"`, `id="pauseBtn`} {
+	for _, marker := range []string{`rel="icon"`, `class="lanes"`, `id="edge"`, `id="l-mismatch"`, `id="benchbars"`, `id="pauseBtn"`, `data-op="mvola"`} {
 		if !strings.Contains(rec.Body.String(), marker) {
 			t.Fatalf("dashboard missing %s", marker)
 		}
