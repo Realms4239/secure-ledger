@@ -215,6 +215,18 @@ func TestTransferPipeline_Table(t *testing.T) {
 	}
 }
 
+func TestTransferRejectsFractionalAmount(t *testing.T) {
+	d := setup(t)
+	tok := makeToken(t, []byte(testSecret), "alice", time.Now().Add(time.Hour))
+	rec := d.do(t, "POST", "/transfers", tok, uuid.NewString(), `{"from_account":"alice","to_account":"bob","amount":100.5}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400 (body %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(d.audit.String(), `"decision":"bad_request"`) {
+		t.Fatalf("audit missing bad_request: %q", d.audit.String())
+	}
+}
+
 func mustSlot(t *testing.T, rw *ipc.RingWriter) []byte {
 	t.Helper()
 	slot, err := rw.ReadRaw(0)

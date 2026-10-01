@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -33,7 +34,7 @@ type StatusClient interface {
 type TransfersHandler struct {
 	secret []byte
 	idem   *idempotency.Store
-	ring   *ipc.RingWriter
+	sink   ipc.Sink
 	audit  *audit.Logger
 	status StatusClient
 
@@ -42,8 +43,8 @@ type TransfersHandler struct {
 	duplicateKeyTotal atomic.Int64
 }
 
-func NewTransfersHandler(secret []byte, idem *idempotency.Store, ring *ipc.RingWriter, lg *audit.Logger, status StatusClient) *TransfersHandler {
-	return &TransfersHandler{secret: secret, idem: idem, ring: ring, audit: lg, status: status}
+func NewTransfersHandler(secret []byte, idem *idempotency.Store, sink ipc.Sink, lg *audit.Logger, status StatusClient) *TransfersHandler {
+	return &TransfersHandler{secret: secret, idem: idem, sink: sink, audit: lg, status: status}
 }
 
 func (h *TransfersHandler) Register(mux *http.ServeMux) {
@@ -100,6 +101,10 @@ func (h *TransfersHandler) handleTransfer(w http.ResponseWriter, r *http.Request
 		h.reject(w, start, subject, http.StatusBadRequest, "bad_request", "body must be {from_account,to_account,amount>0}")
 		return
 	}
+	if req.Amount != math.Trunc(req.Amount) {
+		h.reject(w, start, subject, http.StatusBadRequest, "bad_request", "amount must be integer minor units")
+		return
+	}
 
 	if !policy.Authorized(subject, req.FromAccount) {
 		h.reject(w, start, subject, http.StatusForbidden, "forbidden", "subject may not debit from_account")
@@ -122,8 +127,8 @@ func (h *TransfersHandler) handleTransfer(w http.ResponseWriter, r *http.Request
 		h.reject(w, start, subject, http.StatusInternalServerError, "internal_error", "payload marshal failed")
 		return
 	}
-	if err := h.ring.Write(EventTypeSagaStart, [16]byte(sagaID), payload); err != nil {
-		if errors.Is(err, ipc.ErrRingFull) {
+	if err := h.sink.Write(EventTypeSagaStart, [16]byte(sagaID), payload); err != nil {
+		if errors.Is(err, ipc.ErrSinkFull) {
 			h.ringFullTotal.Add(1)
 			h.reject(w, start, subject, http.StatusServiceUnavailable, "ring_full", "backpressure: engine ring full")
 			return
@@ -152,8 +157,8 @@ func (h *TransfersHandler) handleTransferFail(w http.ResponseWriter, r *http.Req
 		h.reject(w, start, subject, http.StatusBadRequest, "bad_request", "saga id must be a UUID")
 		return
 	}
-	if err := h.ring.Write(EventTypeStepFail, [16]byte(sagaID), nil); err != nil {
-		if errors.Is(err, ipc.ErrRingFull) {
+	if err := h.sink.Write(EventTypeStepFail, [16]byte(sagaID), nil); err != nil {
+		if errors.Is(err, ipc.ErrSinkFull) {
 			h.ringFullTotal.Add(1)
 			h.reject(w, start, subject, http.StatusServiceUnavailable, "ring_full", "backpressure: engine ring full")
 			return
