@@ -1,0 +1,84 @@
+   Compiling h2 v0.4.18
+   Compiling serde_core v1.0.229
+   Compiling heck v0.5.0
+   Compiling serde v1.0.229
+   Compiling multimap v0.10.1
+   Compiling log v0.4.33
+   Compiling prost-build v0.13.5
+   Compiling rand_chacha v0.3.1
+   Compiling indexmap v1.9.3
+   Compiling libc v0.2.189
+   Compiling rustversion v1.0.23
+   Compiling hyper v1.11.0
+   Compiling http-body-util v0.1.5
+   Compiling async-trait v0.1.92
+   Compiling serde_derive v1.0.229
+   Compiling pin-project-internal v1.1.13
+   Compiling memchr v2.8.3
+   Compiling hashbrown v0.12.3
+   Compiling mime v0.3.17
+   Compiling zmij v1.0.23
+   Compiling axum-core v0.4.5
+   Compiling pin-project v1.1.13
+   Compiling hyper-util v0.1.20
+   Compiling tonic-build v0.12.3
+   Compiling rand v0.8.7
+   Compiling tower v0.5.3
+   Compiling windows-sys v0.52.0
+   Compiling async-stream-impl v0.3.6
+   Compiling matchit v0.7.3
+   Compiling percent-encoding v2.3.2
+   Compiling thiserror v2.0.20
+   Compiling serde_json v1.0.151
+   Compiling async-stream v0.3.6
+   Compiling socket2 v0.5.10
+   Compiling axum v0.7.9
+   Compiling tower v0.4.13
+   Compiling hyper-timeout v0.5.2
+   Compiling secureledger-engine v0.1.0 (C:\DRIFT\.worktrees\settleledger\engine)
+   Compiling prost v0.13.5
+   Compiling tokio-stream v0.1.19
+   Compiling thiserror-impl v2.0.20
+   Compiling base64 v0.22.1
+   Compiling tonic v0.12.3
+   Compiling windows-sys v0.59.0
+   Compiling hex v0.4.3
+   Compiling memmap2 v0.9.11
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 28s
+     Running unittests src\lib.rs (D:/sl-target/settleledger\debug\deps\secureledger_engine-1f7ad74cca9f8ddf.exe)
+
+running 10 tests
+test saga::tests::duplicate_idempotency_key_no_new_saga ... ok
+test saga::tests::saga_start_creates_in_progress ... ok
+test ring::tests::bad_magic_rejected ... ok
+test ring::tests::reads_one_slot_then_none ... ok
+test wire::tests::bad_length_err ... ok
+test saga::tests::step_fail_transitions_to_compensated ... ok
+test saga::tests::wal_round_trip_and_corrupted_tail ... ok
+test wire::tests::fixture_parses_go_written_slot ... ok
+test wire::tests::payload_too_large_err ... ok
+test wire::tests::round_trip ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+
+     Running unittests src\main.rs (D:/sl-target/settleledger\debug\deps\secureledger_engine-70a87494bf6aa42a.exe)
+
+running 10 tests
+test ring::tests::bad_magic_rejected ... ok
+test ring::tests::reads_one_slot_then_none ... ok
+test saga::tests::duplicate_idempotency_key_no_new_saga ... ok
+test wire::tests::bad_length_err ... ok
+test saga::tests::saga_start_creates_in_progress ... ok
+test wire::tests::fixture_parses_go_written_slot ... ok
+test wire::tests::payload_too_large_err ... ok
+test wire::tests::round_trip ... ok
+test saga::tests::step_fail_transitions_to_compensated ... ok
+test wire::tests::wal_round_trip_and_corrupted_tail ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+   Doc-tests secureledger_engine
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
