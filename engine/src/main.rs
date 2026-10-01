@@ -23,7 +23,9 @@ fn env_or(key: &str, default: &str) -> String {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wal_path = PathBuf::from(env_or("WAL_PATH", "data/wal.log"));
-    let addr = env_or("ENGINE_ADDR", "0.0.0.0:50051");
+    // Loopback by default: the status API has no auth, so never expose it
+    // without deciding to (ENGINE_ADDR override).
+    let addr = env_or("ENGINE_ADDR", "127.0.0.1:50051");
 
     // 1. Replay WAL into saga state (RPO = last fsynced record)
     let replay_start = Instant::now();

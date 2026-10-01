@@ -16,7 +16,7 @@ func TestDashboardServes(t *testing.T) {
 	h.Register(mux)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/dashboard", nil))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<title>SettleLedger</title>") {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<title>SettleLedger") {
 		t.Fatalf("dashboard = %d, want 200 with title", rec.Code)
 	}
 }
@@ -57,7 +57,19 @@ func TestStreamReplaysThenLives(t *testing.T) {
 	if ct := resp.Header.Get("Content-Type"); ct != "text/event-stream" {
 		t.Fatalf("content-type = %q", ct)
 	}
-	line, err := bufio.NewReader(resp.Body).ReadString('\n')
+	br := bufio.NewReader(resp.Body)
+	hello, err := br.ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(hello, ": connected") {
+		t.Fatalf("hello = %q", hello)
+	}
+	line, err := br.ReadString('\n') // blank separator after the hello
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err = br.ReadString('\n') // first replayed event
 	if err != nil {
 		t.Fatal(err)
 	}

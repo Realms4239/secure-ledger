@@ -89,6 +89,10 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	ch, unsub := h.Subscribe()
 	defer unsub()
+	// Immediate hello: flushes headers at once (otherwise net/http holds
+	// them until the first event) and tells the dashboard the wire is live.
+	_, _ = fmt.Fprint(w, ": connected\n\n")
+	fl.Flush()
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
 	for {

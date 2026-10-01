@@ -2,80 +2,185 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>SettleLedger</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SettleLedger — live settlement</title>
 <style>
-body{font-family:system-ui,sans-serif;max-width:960px;margin:2em auto;padding:0 1em}
-section{border:1px solid #ccc;border-radius:8px;padding:1em;margin-bottom:1em}
-#log{list-style:none;padding:0;max-height:300px;overflow-y:auto}
-#log li{font-family:monospace;font-size:13px;border-bottom:1px dotted #ddd;padding:2px 0}
-pre{background:#f6f6f6;padding:0.5em;overflow-x:auto}
-button{margin-right:0.5em}
+:root{
+  --ground:#0a0d12; --panel:#10141b; --seam:#222a36;
+  --ink:#d8dee8; --dim:#8f99a8; --faint:#5b6472;
+  --signal:#7dd3fc; --ok:#3fd08c; --warn:#e0a63c; --bad:#e06565;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
+  background-image:
+    radial-gradient(1px 1px at 12% 22%, #ffffff14 50%, transparent 51%),
+    radial-gradient(1px 1px at 68% 8%, #ffffff10 50%, transparent 51%),
+    radial-gradient(1px 1px at 84% 64%, #ffffff0d 50%, transparent 51%),
+    radial-gradient(1.5px 1.5px at 34% 78%, #ffffff0d 50%, transparent 51%),
+    radial-gradient(1px 1px at 52% 42%, #ffffff0a 50%, transparent 51%);
+}
+main{max-width:1020px; margin:0 auto; padding:32px 20px 64px}
+header{margin:8px 0 28px}
+header h1{font-size:28px; margin:0 0 6px; letter-spacing:-0.01em}
+header p{margin:0; color:var(--dim); font-size:15px}
+.live-dot{display:inline-block; width:8px; height:8px; border-radius:50%;
+  background:var(--signal); margin-right:8px}
+section{background:var(--panel); border:1px solid var(--seam); border-radius:10px;
+  padding:18px 20px 20px; margin:0 0 16px}
+section h2{font-size:12px; text-transform:uppercase; letter-spacing:0.12em;
+  color:var(--dim); margin:0 0 14px; font-weight:600}
+section h2{margin-top:2px}
+#log{list-style:none; margin:0; padding:0; max-height:320px; overflow-y:auto;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:13px}
+#log li{padding:3px 0; border-bottom:1px dotted #1d242f; color:var(--ink);
+  animation:arrive .45s cubic-bezier(.2,.9,.25,1)}
+#log li .k-warn{color:var(--warn)} #log li .k-ok{color:var(--ok)}
+#log li .k-bad{color:var(--bad)} #log li .k-info{color:var(--signal)}
+@keyframes arrive{from{opacity:0; transform:translateY(-4px)}to{opacity:1; transform:none}}
+@media (prefers-reduced-motion:reduce){#log li{animation:none}}
+pre{background:#0d1117; border:1px solid var(--seam); border-radius:8px;
+  padding:12px 14px; overflow-x:auto; font-size:13px; margin:0;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.row{display:flex; gap:10px; margin-bottom:12px}
+input[type=text]{flex:1; background:#0d1117; border:1px solid var(--seam);
+  border-radius:8px; color:var(--ink); padding:9px 12px; font-size:14px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+input[type=text]:focus{outline:2px solid var(--signal); outline-offset:1px; border-color:transparent}
+button{background:transparent; border:1px solid #3a4453; color:var(--ink);
+  border-radius:8px; padding:9px 16px; font-size:14px; cursor:pointer}
+button:hover{border-color:var(--signal)}
+button:focus-visible{outline:2px solid var(--signal); outline-offset:2px}
+.chaos{margin-top:28px}
+.chaos .danger-zone{margin-top:18px; padding-top:18px; border-top:1px solid var(--seam)}
+.chaos p{color:var(--dim); font-size:14px; margin:8px 0}
+button.danger{border-color:#5a3434; color:#f0a3a3}
+button.danger:hover{border-color:var(--bad)}
+button.danger:focus-visible{outline:2px solid var(--bad); outline-offset:2px}
+.grid{display:grid; grid-template-columns:1fr 1fr; gap:16px}
+@media (max-width:760px){.grid{grid-template-columns:1fr}}
+.muted{color:var(--faint); font-size:13px}
+a{color:var(--signal)}
 </style>
 </head>
 <body>
-<h1>SettleLedger — settlement reconciliation</h1>
+<!-- THESIS: a settlement engineer's night console — intake streams, states resolve, discrepancies queue, recovery is shown. Refuses the card-grid marketing page. OWN-WORLD: near-black graphite, hairline seams, small-caps headers, mono figures, one signal cyan + state colors on text only. STORY: a reviewer sees within 30s that transfers settle, exceptions surface, and kill-9 changes nothing. FIRST VIEWPORT: title + live intake stream + saga lookup, then report/metrics/bench, chaos isolated at the end. FORM: dark-first dev console fused with observatory readouts (seed aa894d5e). FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md. -->
+<main>
+<header>
+<h1><span class="live-dot" aria-hidden="true"></span>SettleLedger</h1>
+<p>Cross-operator settlement, reconciling live. Simulated MVola / Orange / Airtel traffic.</p>
+</header>
 
-<section>
-<h2>Live intake</h2>
-<ul id="log"></ul>
+<section aria-label="Live intake">
+<h2>Intake</h2>
+<ul id="log"><li class="muted">Waiting for transfers…</li></ul>
 </section>
 
-<section>
+<section aria-label="Saga lookup">
 <h2>Saga lookup</h2>
-<input id="sagaid" placeholder="saga uuid" size="40">
-<button onclick="lookup()">Lookup</button>
-<pre id="saga">—</pre>
+<div class="row">
+<input id="sagaid" type="text" placeholder="saga id, e.g. 550e8400-…" aria-label="Saga id">
+<button id="lookupBtn">Look up</button>
+</div>
+<pre id="saga">Enter an id to see its state and match notes.</pre>
+</section>
+
+<div class="grid">
+<section aria-label="Settlement report">
+<h2>Settlement report</h2>
+<pre id="report">No settlement processed yet.</pre>
+</section>
+
+<section aria-label="Gateway metrics">
+<h2>Gateway</h2>
+<pre id="metrics">Loading…</pre>
+</section>
+</div>
+
+<section aria-label="Last measured bench">
+<h2>Measured performance</h2>
+<pre id="bench">Loading…</pre>
+</section>
+
+<section class="chaos" aria-label="Chaos drills">
+<h2>Drills</h2>
+<p>Pause intake to simulate a network partition. The engine holds its offsets;
+switching off replays the backlog. Nothing is lost by design.
+Paste an operator JWT first (mint one with <code>loader -token</code>).</p>
+<div class="row">
+<input id="chaostoken" type="text" placeholder="operator JWT" aria-label="Operator JWT">
+</div>
+<button id="ponBtn">Pause intake</button>
+<button id="poffBtn">Resume intake</button>
+<div class="danger-zone">
+<p>Kill-9 drill runs outside the browser: stop the engine process, restart it,
+then look a saga up again. States return from the write-ahead log.
+Scripted in <code>scripts/recovery.ps1</code>.</p>
+<button id="killBtn" class="danger" onclick="document.getElementById('killnote').hidden=false">How to run the kill-9 drill</button>
+<p id="killnote" hidden>Stop the engine process (kill -9 / Stop-Process -Force), start it again
+with the same environment, and compare the settlement report before and after.
+<code>scripts/recovery.ps1</code> does this and fails if one byte differs.</p>
+</div>
+</section>
+</main>
+
 <script>
-function lookup(){
-  fetch('/sagas/'+document.getElementById('sagaid').value)
-    .then(r=>r.text()).then(t=>document.getElementById('saga').textContent=t);
-}
-</script>
-</section>
-
-<section>
-<h2>Match report</h2>
-<pre id="report">loading…</pre>
-</section>
-
-<section>
-<h2>Gateway metrics</h2>
-<pre id="metrics">loading…</pre>
-</section>
-
-<section>
-<h2>Last measured bench</h2>
-<pre id="bench">loading…</pre>
-</section>
-
-<section>
-<h2>Chaos</h2>
-<button onclick="partition(true)">Partition ON (engine pauses intake)</button>
-<button onclick="partition(false)">Partition OFF (catch-up replay)</button>
-<p>Kill-9 drill is manual: stop the engine process, restart it, watch states
-return via lookup above. Scripted in <code>scripts/recovery.ps1</code>.</p>
-<script>
-function partition(on){
-  fetch('/chaos/partition',{method:'POST',headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({on:on})}).then(r=>r.text()).then(t=>alert(t));
-}
-</script>
-</section>
-
-<script>
-const log=document.getElementById('log');
-const es=new EventSource('/events/stream');
-es.onmessage=e=>{
-  const li=document.createElement('li');
-  li.textContent=e.data;
+const log = document.getElementById('log');
+let firstEvent = true;
+function addRow(kind, text){
+  if(firstEvent){ log.replaceChildren(); firstEvent=false; }
+  const li = document.createElement('li');
+  const dot = document.createElement('span');
+  dot.className = kind==='accepted' ? 'k-ok' : kind==='held' ? 'k-warn' : kind==='error' ? 'k-bad' : 'k-info';
+  dot.textContent = '● ';
+  li.appendChild(dot);
+  li.appendChild(document.createTextNode(text));
   log.prepend(li);
-  while(log.children.length>50)log.lastChild.remove();
-};
-setInterval(()=>{
-  fetch('/report').then(r=>r.text()).then(t=>document.getElementById('report').textContent=t);
-  fetch('/metricsz').then(r=>r.text()).then(t=>document.getElementById('metrics').textContent=t);
-  fetch('/bench-latest.json').then(r=>r.text()).then(t=>document.getElementById('bench').textContent=t);
-},5000);
+  while(log.children.length > 60) log.lastChild.remove();
+}
+function kindOf(e){
+  try{
+    const o = JSON.parse(e);
+    if(o.kind==='accepted') return 'accepted';
+    if(o.kind==='held_for_review') return 'held';
+    if(o.kind==='partition') return 'error';
+    return 'info';
+  }catch(_){ return 'info'; }
+}
+const es = new EventSource('/events/stream');
+es.onmessage = e => addRow(kindOf(e.data), e.data);
+es.onerror = () => addRow('error', 'stream dropped — retrying');
+function text(url, el, empty){
+  fetch(url).then(r => {
+    if(!r.ok) throw new Error(String(r.status));
+    return r.text();
+  }).then(t => { document.getElementById(el).textContent = t; })
+    .catch(() => { document.getElementById(el).textContent = empty; });
+}
+function refresh(){
+  text('/report', 'report', 'No settlement processed yet.');
+  text('/metricsz', 'metrics', 'Gateway unreachable.');
+  text('/bench-latest.json', 'bench', 'No measurements recorded.');
+}
+document.getElementById('lookupBtn').addEventListener('click', () => {
+  const id = document.getElementById('sagaid').value.trim();
+  if(!id) return;
+  text('/sagas/' + encodeURIComponent(id), 'saga', 'Lookup failed — is the engine up?');
+});
+function chaos(on){
+  const tok = document.getElementById('chaostoken').value.trim();
+  fetch('/chaos/partition', {method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':'Bearer '+tok},
+    body:JSON.stringify({on:on})})
+    .then(r => r.text())
+    .then(t => addRow(on ? 'error' : 'info', 'partition: ' + t))
+    .catch(() => addRow('error', 'partition switch failed'));
+}
+document.getElementById('ponBtn').addEventListener('click', () => chaos(true));
+document.getElementById('poffBtn').addEventListener('click', () => chaos(false));
+setInterval(refresh, 5000);
+refresh();
 </script>
 </body>
 </html>
