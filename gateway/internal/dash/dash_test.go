@@ -3,6 +3,7 @@ package dash
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,14 +21,21 @@ func TestDashboardServes(t *testing.T) {
 	}
 }
 
-func TestBenchPlaceholder(t *testing.T) {
+func TestBenchLatest(t *testing.T) {
 	h := NewHub()
 	mux := http.NewServeMux()
 	h.Register(mux)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest("GET", "/bench-latest.json", nil))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"measured":false`) {
-		t.Fatalf("bench = %d %q, want measured:false", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("bench = %d, want 200", rec.Code)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+		t.Fatal(err)
+	}
+	if v["measured"] != true || v["p99_ms"] == nil || v["report"] == nil {
+		t.Fatalf("bench lacks measured numbers: %s", rec.Body.String())
 	}
 }
 
