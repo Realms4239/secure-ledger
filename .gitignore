@@ -16,3 +16,4 @@ data/wal.log
 /dev/shm/secureledger.ring
 .worktrees/
 .superpowers/
+.slim/deepwork/
