@@ -247,63 +247,73 @@ fn now_ns() -> u64 {
 }
 
 fn run_settlement_sweep(dir: PathBuf, report: PathBuf, store: Arc<Mutex<SagaStore>>) {
-    let mut done: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    // Re-sweep every file every cycle: intake (loader) and settlement (CSV)
+    // race, so a one-shot match would orphan rows whose sagas arrive later.
+    // Re-matching is idempotent — step notes dedupe, the report rewrites.
+    let mut seen: Vec<PathBuf> = Vec::new();
     loop {
         std::thread::sleep(Duration::from_secs(5));
-        let entries = match std::fs::read_dir(&dir) {
-            Ok(e) => e,
-            Err(_) => continue, // dir absent until first settlement drop; retry
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("csv") || !done.insert(path.clone())
-            {
-                continue;
-            }
-            let text = match std::fs::read_to_string(&path) {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("engine: settlement {} unreadable: {e}", path.display());
-                    continue;
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("csv")
+                    && !seen.contains(&path)
+                {
+                    seen.push(path);
                 }
-            };
-            let (rows, corrupt) = crate::settle::parse_csv(&text);
-            let mut guard = match store.lock() {
-                Ok(g) => g,
-                Err(_) => return, // poisoned
-            };
-            let snaps: Vec<crate::settle::SagaSnap> = guard
-                .sagas()
-                .map(|s| crate::settle::SagaSnap {
-                    saga_id: s.saga_id.clone(),
-                    txid: s.txid.clone(),
-                    amount: s.amount,
-                    updated_at_ns: s.updated_at_ns,
-                })
-                .collect();
-            let outcome = crate::settle::match_all(&snaps, &rows);
-            for (sid, note) in &outcome.notes {
-                guard.annotate(sid, note.clone());
             }
-            let mut rep = outcome.report;
-            rep.csv_corrupt += corrupt;
-            drop(guard);
-            let doc = serde_json::json!({ "generated_at_ns": now_ns(), "report": rep });
-            if let Some(parent) = report.parent() {
-                let _ = std::fs::create_dir_all(parent);
+        }
+        if seen.is_empty() {
+            continue; // no settlement dropped yet; retry
+        }
+        let mut rows: Vec<crate::settle::SettlementRow> = Vec::new();
+        let mut corrupt = 0u64;
+        for path in &seen {
+            match std::fs::read_to_string(path) {
+                Ok(text) => {
+                    let (mut r, c) = crate::settle::parse_csv(&text);
+                    rows.append(&mut r);
+                    corrupt += c;
+                }
+                Err(e) => eprintln!("engine: settlement {} unreadable: {e}", path.display()),
             }
-            match std::fs::write(&report, serde_json::to_string_pretty(&doc).unwrap()) {
-                Ok(()) => println!(
-                    "engine: settlement {}: {} exact + {} tolerated, {}/{}/{} missing/orphan/mismatch",
-                    path.display(),
-                    rep.settled,
-                    rep.tolerated,
-                    rep.missing.len(),
-                    rep.orphan.len(),
-                    rep.mismatch.len()
-                ),
-                Err(e) => eprintln!("engine: report write failed: {e}"),
-            }
+        }
+        let mut guard = match store.lock() {
+            Ok(g) => g,
+            Err(_) => return, // poisoned
+        };
+        let snaps: Vec<crate::settle::SagaSnap> = guard
+            .sagas()
+            .map(|s| crate::settle::SagaSnap {
+                saga_id: s.saga_id.clone(),
+                txid: s.txid.clone(),
+                amount: s.amount,
+                updated_at_ns: s.updated_at_ns,
+            })
+            .collect();
+        let total = snaps.len();
+        let outcome = crate::settle::match_all(&snaps, &rows);
+        for (sid, note) in &outcome.notes {
+            guard.annotate(sid, note.clone());
+        }
+        let mut rep = outcome.report;
+        rep.csv_corrupt += corrupt;
+        drop(guard);
+        let doc = serde_json::json!({ "generated_at_ns": now_ns(), "report": rep });
+        if let Some(parent) = report.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::write(&report, serde_json::to_string_pretty(&doc).unwrap()) {
+            Ok(()) => println!(
+                "engine: settlement sweep over {} sagas: {} exact + {} tolerated, {}/{}/{} missing/orphan/mismatch",
+                total,
+                rep.settled,
+                rep.tolerated,
+                rep.missing.len(),
+                rep.orphan.len(),
+                rep.mismatch.len()
+            ),
+            Err(e) => eprintln!("engine: report write failed: {e}"),
         }
     }
 }
