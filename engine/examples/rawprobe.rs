@@ -28,7 +28,8 @@ fn main() {
             println!("CreateFileW failed");
             return;
         }
-        let section = CreateFileMappingW(h, std::ptr::null(), PAGE_READONLY, 0, 0, std::ptr::null());
+        let section =
+            CreateFileMappingW(h, std::ptr::null(), PAGE_READONLY, 0, 0, std::ptr::null());
         if section.is_null() {
             println!("CreateFileMappingW failed");
             return;

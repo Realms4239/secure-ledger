@@ -59,8 +59,7 @@ pub struct MatchOutcome {
 /// in mismatch, by construction.
 fn within_tolerance(row: &SettlementRow, s: &SagaSnap) -> bool {
     let delta = row.amount.saturating_add(row.fee).saturating_sub(s.amount);
-    (-TOL_CENTS..=TOL_CENTS).contains(&delta)
-        && row.ts.abs_diff(s.updated_at_ns) <= SKEW_NS
+    (-TOL_CENTS..=TOL_CENTS).contains(&delta) && row.ts.abs_diff(s.updated_at_ns) <= SKEW_NS
 }
 
 /// Parse settlement CSV: `operator,txid,from,to,amount,fee,ts` per line.
@@ -184,10 +183,10 @@ mod tests {
             snap("s4", "t4", 9_000),
         ];
         let rows = vec![
-            row("t1", 10_000, 0),   // exact
-            row("t2", 4_950, 50),   // fee-shifted within tol
-            row("nope", 1, 0),      // orphan
-            row("t3", 1, 0),        // mismatch
+            row("t1", 10_000, 0), // exact
+            row("t2", 4_950, 50), // fee-shifted within tol
+            row("nope", 1, 0),    // orphan
+            row("t3", 1, 0),      // mismatch
         ];
         let out = match_all(&snaps, &rows);
         assert_eq!(out.report.settled, 1);
@@ -204,14 +203,25 @@ mod tests {
         // Crafted extremes must classify, never panic (debug) or wrap
         // (release) into a false settle.
         let snaps = vec![snap("s1", "t1", 100), snap("s2", "t2", 100)];
-        let rows = vec![
-            row("t1", i64::MAX, 1),
-            row("t2", i64::MIN, -1),
-        ];
+        let rows = vec![row("t1", i64::MAX, 1), row("t2", i64::MIN, -1)];
         let out = match_all(&snaps, &rows);
         assert_eq!(out.report.settled, 0);
         assert_eq!(out.report.tolerated, 0);
-        assert_eq!(out.report.mismatch, vec!["t1".to_string(), "t2".to_string()]);
+        assert_eq!(
+            out.report.mismatch,
+            vec!["t1".to_string(), "t2".to_string()]
+        );
+    }
+
+    #[test]
+    fn csv_crlf_and_whitespace_tolerated() {
+        // Windows-produced files arrive with CRLF; blank lines are skipped,
+        // not counted. str::lines strips the carriage returns.
+        let text = "operator,txid,from,to,amount,fee,ts\r\nmvola,t1,alice,bob,100,0,1700000000000000000\r\n\r\n   \r\n";
+        let (rows, corrupt) = parse_csv(text);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(corrupt, 0);
+        assert_eq!(rows[0].txid, "t1");
     }
 
     #[test]

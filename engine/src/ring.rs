@@ -87,7 +87,6 @@ impl RingReader {
             Err(_) => Err(RingError::CorruptSlot(tail, "bad slot".into())),
         }
     }
-
 }
 
 #[derive(Debug, thiserror::Error)]

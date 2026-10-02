@@ -6,11 +6,14 @@ mod settle;
 mod tail;
 mod wire;
 
-use crate::grpc::pb::reconciliation_server::ReconciliationServer;
 use crate::grpc::pb;
+use crate::grpc::pb::reconciliation_server::ReconciliationServer;
 use crate::ring::RingReader;
+use crate::saga::{
+    SagaState, SagaStore, StoreError, TYPE_COMPENSATE, TYPE_SAGA_START, TYPE_STEP_FAIL,
+    TYPE_STEP_OK,
+};
 use crate::tail::{FileTailer, TailError};
-use crate::saga::{SagaState, SagaStore, StoreError, TYPE_COMPENSATE, TYPE_SAGA_START, TYPE_STEP_FAIL, TYPE_STEP_OK};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -71,8 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::env::var("EVENTS_PATH").unwrap_or_else(|_| "data/events.log".to_string()),
             );
             let offset = PathBuf::from(
-                std::env::var("EVENTS_OFFSET")
-                    .unwrap_or_else(|_| "data/events.offset".to_string()),
+                std::env::var("EVENTS_OFFSET").unwrap_or_else(|_| "data/events.offset".to_string()),
             );
             let flag = PathBuf::from(
                 std::env::var("PARTITION_FLAG")
@@ -266,8 +268,7 @@ fn run_settlement_sweep(dir: PathBuf, report: PathBuf, store: Arc<Mutex<SagaStor
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.extension().and_then(|e| e.to_str()) == Some("csv")
-                    && !seen.contains(&path)
+                if path.extension().and_then(|e| e.to_str()) == Some("csv") && !seen.contains(&path)
                 {
                     seen.push(path);
                 }
@@ -306,15 +307,15 @@ fn run_settlement_sweep(dir: PathBuf, report: PathBuf, store: Arc<Mutex<SagaStor
         for (sid, note) in &outcome.notes {
             guard.annotate(sid, note.clone());
         }
-            let mut rep = outcome.report;
-            rep.csv_corrupt += corrupt;
-            drop(guard);
-            // Deterministic report bytes: saga iteration order is HashMap
-            // random per process, so sort the id lists — reports must diff
-            // cleanly across restarts (recovery drill compares them).
-            rep.missing.sort();
-            rep.orphan.sort();
-            rep.mismatch.sort();
+        let mut rep = outcome.report;
+        rep.csv_corrupt += corrupt;
+        drop(guard);
+        // Deterministic report bytes: saga iteration order is HashMap
+        // random per process, so sort the id lists — reports must diff
+        // cleanly across restarts (recovery drill compares them).
+        rep.missing.sort();
+        rep.orphan.sort();
+        rep.mismatch.sort();
         let doc = serde_json::json!({ "generated_at_ns": now_ns(), "report": rep });
         if let Some(parent) = report.parent() {
             let _ = std::fs::create_dir_all(parent);
