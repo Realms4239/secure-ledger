@@ -3,290 +3,408 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SettleLedger — live settlement</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0d12'/%3E%3Cpath d='M16 5v22M9 11h14M9 21h14' stroke='%237dd3fc' stroke-width='2' stroke-linecap='round'/%3E%3Ccircle cx='16' cy='5' r='2.4' fill='%233fd08c'/%3E%3C/svg%3E">
+<title>SettleLedger — settlement reconciliation, live</title>
+<meta name="description" content="Cross-operator mobile-money settlement reconciliation: a Go gateway and a Rust engine that replay, match and settle operator files with deterministic recovery.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23000'/%3E%3Cpath d='M10 9h12M10 16h12M10 23h8' stroke='%23fff' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
 :root{
-  --ground:#090c11; --panel:#0f131a; --inset:#0c1016; --seam:#1f2733;
-  --ink:#dae0ea; --dim:#8b95a4; --faint:#5a6371;
-  --signal:#7dd3fc; --ok:#3fd08c; --warn:#e0a63c; --bad:#e06565;
-  --mv:#7dd3fc; --or:#c3a3f5; --ai:#6ee7b7;
+  --canvas:#ffffff; --canvas-soft:#fafafa; --card:#ffffff; --strong:#f0f0f3;
+  --dark:#171717; --dark-elev:#1a1a1a;
+  --ink:#171717; --body:#60646c; --muted:#8a8f98;
+  --link:#0d74ce; --success:#16a34a; --warning:#ab6400; --error:#eb8e90;
+  --hairline:#f0f0f3; --hairline-soft:#f5f5f7; --hairline-strong:#dcdee0;
+  --sans:'Inter',-apple-system,system-ui,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono','Fira Code',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --r-xs:4px; --r-sm:6px; --r-md:8px; --r-lg:12px; --r-xl:16px; --r-pill:9999px;
 }
 *{box-sizing:border-box}
-body{
-  margin:0; background:var(--ground); color:var(--ink);
-  font-family:system-ui,-apple-system,"Segoe UI",sans-serif;
-  background-image:
-    radial-gradient(1px 1px at 15% 18%, #ffffff12 50%, transparent 51%),
-    radial-gradient(1px 1px at 72% 6%, #ffffff0d 50%, transparent 51%),
-    radial-gradient(1.5px 1.5px at 40% 82%, #ffffff0d 50%, transparent 51%),
-    radial-gradient(1px 1px at 88% 58%, #ffffff0a 50%, transparent 51%);
-}
-.shell{max-width:1360px; margin:0 auto; padding:26px 20px 60px}
+html{-webkit-text-size-adjust:100%}
+body{margin:0; background:var(--canvas); color:var(--body); font-family:var(--sans);
+  font-size:16px; line-height:1.5; letter-spacing:0}
+h1,h2,h3{color:var(--ink); margin:0; font-weight:600}
+a{color:var(--link); text-decoration:none}
+a:hover{text-decoration:underline}
+code,kbd,.mono{font-family:var(--mono); font-size:13px; line-height:1.5}
 
-/* Masthead: brand + standing totals, one hairline under both */
-.mast{display:flex; align-items:flex-end; justify-content:space-between;
-  gap:24px; flex-wrap:wrap; padding-bottom:16px; border-bottom:1px solid var(--seam)}
-.brand{display:flex; align-items:center; gap:12px}
-.brand h1{margin:0; font-size:22px; letter-spacing:0.16em; font-weight:700}
-.brand h1 span{color:var(--signal)}
-.brand small{display:block; color:var(--faint); font-size:11px; letter-spacing:0.14em;
-  text-transform:uppercase; margin-top:3px}
-.totals{display:flex; gap:22px}
-.totals div{min-width:96px}
-.totals b{display:block; font-size:20px; font-weight:600; letter-spacing:-0.01em;
-  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.totals span{font-size:10.5px; letter-spacing:0.12em; text-transform:uppercase; color:var(--dim)}
-.t-ok b{color:var(--ok)} .t-warn b{color:var(--warn)} .t-bad b{color:var(--bad)}
+/* Top navigation: 64px, white, hairline under */
+.nav{height:64px; background:var(--canvas); border-bottom:1px solid var(--hairline);
+  position:sticky; top:0; z-index:20}
+.nav-in{max-width:1200px; margin:0 auto; height:100%; padding:0 24px;
+  display:flex; align-items:center; gap:28px}
+.wordmark{display:flex; align-items:center; gap:9px; color:var(--ink); font-weight:600; font-size:15px;
+  letter-spacing:-0.01em}
+.wordmark:hover{text-decoration:none}
+.wordmark svg{flex:none}
+.nav-links{display:flex; gap:22px; margin-right:auto}
+.nav-links a{color:var(--body); font-size:14px; font-weight:500}
+.nav-links a:hover{color:var(--ink)}
+@media (max-width:860px){.nav-links{display:none}}
 
-#demobanner{background:#171207; border:1px solid #4a3a17; border-radius:8px;
-  padding:10px 14px; color:var(--warn); font-size:13.5px; margin:16px 0 0}
+/* Buttons: black is the only fill, 8px radius, 40px tall */
+.btn{display:inline-flex; align-items:center; justify-content:center; height:40px; padding:0 18px;
+  font-family:var(--sans); font-size:14px; font-weight:500; border-radius:var(--r-md);
+  border:1px solid transparent; background:var(--ink); color:#fff; cursor:pointer;
+  transition:background .15s ease}
+.btn:hover{background:#1a1a1a}
+.btn:active{background:#000}
+.btn:focus-visible{outline:2px solid var(--link); outline-offset:2px}
+.btn-secondary{background:var(--card); color:var(--ink); border-color:var(--hairline-strong)}
+.btn-secondary:hover{background:var(--canvas-soft); border-color:var(--muted)}
+.btn-sm{height:34px; padding:0 14px; font-size:13px}
+.pill{display:inline-flex; align-items:center; gap:7px; height:28px; padding:0 12px; border-radius:var(--r-pill);
+  background:var(--strong); color:var(--ink); font-size:11px; font-weight:600; letter-spacing:0.88px;
+  text-transform:uppercase}
+.dot{width:7px; height:7px; border-radius:50%; background:var(--success)}
+.dot.idle{background:var(--muted)}
 
-/* The spine: one edge strip where every request lands */
-.spine{margin:16px 0 0; border:1px solid var(--seam); border-radius:10px; background:var(--panel)}
-.spine-head{display:flex; align-items:center; gap:14px; padding:11px 16px;
-  border-bottom:1px solid var(--seam)}
-.spine-head h2{margin:0; font-size:11px; letter-spacing:0.14em; text-transform:uppercase;
-  color:var(--dim); font-weight:600}
-.spine-head .count{margin-left:auto; color:var(--faint); font-size:12px;
-  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.edge{display:flex; gap:8px; padding:12px 16px; overflow-x:auto; min-height:64px; align-items:center}
-.edge:empty::after{content:'waiting for traffic'; color:var(--faint); font-size:13px}
-.chip{flex:none; display:flex; align-items:center; gap:8px; padding:6px 10px; border-radius:7px;
-  background:var(--inset); border:1px solid var(--seam); font-size:12.5px; white-space:nowrap;
-  animation:slidein .4s cubic-bezier(.2,.9,.25,1)}
-.chip i{width:7px; height:7px; border-radius:50%; background:var(--signal); flex:none}
-.chip.held{border-color:#4a3a17; color:var(--warn)} .chip.held i{background:var(--warn)}
-.chip.dup{color:var(--dim)} .chip.dup i{background:var(--faint)}
-.chip.bad{border-color:#4a2626; color:var(--bad)} .chip.bad i{background:var(--bad)}
-.chip code{color:var(--ink); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.chip .amt{color:var(--dim); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-@keyframes slidein{from{opacity:0; transform:translateX(-10px)}to{opacity:1; transform:none}}
-@media (prefers-reduced-motion:reduce){.chip{animation:none}}
+/* Hero: white canvas with a soft sky wash, headline carries the weight */
+.hero{max-width:1200px; margin:0 auto; padding:72px 24px 40px; position:relative; overflow:hidden}
+.hero::before{content:''; position:absolute; inset:0 0 auto 0; height:460px; pointer-events:none;
+  background:linear-gradient(176deg, #cfe7ff 0%, #dcecff 26%, rgba(255,255,255,0) 88%);
+  filter:blur(2px)}
+.hero h1{position:relative; font-size:28px; line-height:1.2; letter-spacing:-0.84px; max-width:18ch}
+.hero p{position:relative; font-size:16px; max-width:60ch; margin:14px 0 22px}
+.hero .cta-row{position:relative; display:flex; gap:12px; flex-wrap:wrap; align-items:center}
+@media (min-width:1024px){.hero h1{font-size:36px; line-height:1.15; letter-spacing:-1.08px}}
 
-/* Lanes: three operators, money moving in each */
-.lanes{display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-top:16px}
+/* Section rhythm */
+.band{max-width:1200px; margin:0 auto; padding:0 24px}
+.band + .band{margin-top:48px}
+.band-head{margin-bottom:22px}
+.band-head h2{font-size:22px; line-height:1.25; letter-spacing:-0.5px}
+.band-head p{font-size:14px; color:var(--body); max-width:68ch; margin:8px 0 0}
+
+/* The console is the hero's chrome: a device-mockup analogue */
+.console{margin-top:40px; background:var(--card); border:1px solid var(--hairline);
+  border-radius:var(--r-xl); box-shadow:0 4px 12px rgba(0,0,0,.04); overflow:hidden}
+.console-bar{display:flex; align-items:center; gap:12px; padding:12px 18px; border-bottom:1px solid var(--hairline);
+  background:var(--canvas-soft)}
+.console-bar h2{font-size:13px; letter-spacing:.02em}
+.console-bar .grow{margin-left:auto; display:flex; align-items:center; gap:10px}
+.console-bar .count{font-family:var(--mono); font-size:12px; color:var(--muted)}
+.console-body{padding:18px}
+
+/* Edge strip: every request, typed */
+.edge{display:flex; gap:8px; overflow-x:auto; padding-bottom:6px; min-height:52px; align-items:center}
+.edge:empty::after{content:'waiting for traffic'; color:var(--muted); font-size:13px}
+.chip{flex:none; display:inline-flex; align-items:center; gap:8px; height:30px; padding:0 12px;
+  border-radius:var(--r-pill); background:var(--strong); color:var(--ink); font-size:12.5px; white-space:nowrap}
+.chip .amt{font-family:var(--mono); color:var(--body)}
+.chip.ok{background:#f0fbf4} .chip.ok .amt{color:var(--success)}
+.chip.warn{background:#fdf7ec} .chip.warn .amt{color:var(--warning)}
+.chip.bad{background:#fdf0f0} .chip.bad .amt{color:var(--error)}
+.chip.quiet{background:var(--canvas-soft); color:var(--body); border:1px solid var(--hairline)}
+.chip code{font-size:12px}
+
+/* Lanes: three operators, one row each */
+.lanes{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:22px}
 @media (max-width:900px){.lanes{grid-template-columns:1fr}}
-.lane{background:var(--panel); border:1px solid var(--seam); border-radius:10px;
-  padding:0; overflow:hidden; display:flex; flex-direction:column; min-height:300px}
-.lane-top{display:flex; align-items:center; gap:10px; padding:12px 16px 10px;
-  border-bottom:1px solid var(--seam)}
-.lane-top h2{margin:0; font-size:12px; letter-spacing:0.13em; text-transform:uppercase; font-weight:600}
-.lane-top .n{margin-left:auto; font-size:11.5px; color:var(--faint);
-  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.lane[data-op=mvola] .lane-top h2{color:var(--mv)} .lane[data-op=mvola] .meter-fill{background:var(--mv)}
-.lane[data-op=orange] .lane-top h2{color:var(--or)} .lane[data-op=orange] .meter-fill{background:var(--or)}
-.lane[data-op=airtel] .lane-top h2{color:var(--ai)} .lane[data-op=airtel] .meter-fill{background:var(--ai)}
-/* Meters and bars scale on transform (not width) so growth never reflows. */
-.meter{height:2px; background:var(--inset)}
-.meter-fill{height:100%; width:100%; transform:scaleX(0); transform-origin:left;
-  transition:transform .6s cubic-bezier(.2,.9,.25,1)}
-@media (prefers-reduced-motion:reduce){.meter-fill{transition:none}}
-.lane-body{flex:1; padding:10px 12px; display:flex; flex-direction:column; gap:6px;
-  max-height:260px; overflow-y:auto}
-.lane-body:empty::after{content:'no transfers yet'; color:var(--faint); font-size:12.5px}
-.lane .chip{width:100%; background:transparent; border-color:transparent;
-  border-bottom:1px dotted #1a212b; border-radius:0; padding:6px 4px; animation:none}
-.lane .chip code{color:var(--ink)} .lane .chip .amt{color:var(--dim); margin-left:auto}
-.lane-foot{border-top:1px solid var(--seam); padding:9px 16px; display:flex;
-  justify-content:space-between; color:var(--faint); font-size:11.5px;
-  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+.lane{border:1px solid var(--hairline); border-radius:var(--r-lg); padding:18px 18px 16px; background:var(--card)}
+.lane-head{display:flex; align-items:center; gap:10px; margin-bottom:12px}
+.lane-head h3{font-size:16px; letter-spacing:0}
+.lane-head .n{margin-left:auto; font-family:var(--mono); font-size:12px; color:var(--muted)}
+.meter{height:4px; border-radius:var(--r-pill); background:var(--hairline-soft); overflow:hidden}
+.meter-fill{height:100%; width:100%; background:var(--ink); border-radius:var(--r-pill);
+  transform:scaleX(0); transform-origin:left; transition:transform .6s cubic-bezier(.2,.9,.25,1)}
+.lane-body{margin-top:12px; max-height:190px; overflow-y:auto; min-height:28px}
+.lane-body:empty::after{content:'no transfers yet'; color:var(--muted); font-size:13px}
+.lane-row{display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid var(--hairline-soft);
+  font-size:13px}
+.lane-row:last-child{border-bottom:none}
+.lane-row code{font-size:12px; color:var(--ink)}
+.lane-row .amt{margin-left:auto; font-family:var(--mono); color:var(--body)}
+.lane-foot{display:flex; justify-content:space-between; margin-top:12px; padding-top:12px;
+  border-top:1px solid var(--hairline); font-family:var(--mono); font-size:12px; color:var(--muted)}
 
-/* Dock: settlement truth + instruments */
-.dock{display:grid; grid-template-columns:1.35fr 1fr; gap:14px; margin-top:16px}
-@media (max-width:900px){.dock{grid-template-columns:1fr}}
-.card{background:var(--panel); border:1px solid var(--seam); border-radius:10px; padding:16px 18px 18px}
-.card h2{margin:2px 0 14px; font-size:11px; letter-spacing:0.13em; text-transform:uppercase;
-  color:var(--dim); font-weight:600}
-.inspect{display:grid; grid-template-columns:1fr 1fr; gap:14px}
-@media (max-width:760px){.inspect{grid-template-columns:1fr}}
-.row{display:flex; gap:9px; margin-bottom:11px}
-input[type=text]{flex:1; background:var(--inset); border:1px solid var(--seam); border-radius:7px;
-  color:var(--ink); padding:8px 11px; font-size:13.5px;
-  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-input[type=text]:focus{outline:2px solid var(--signal); outline-offset:1px; border-color:transparent}
-button{background:transparent; border:1px solid #38424f; color:var(--ink); border-radius:7px;
-  padding:8px 14px; font-size:13.5px; cursor:pointer}
-button:hover{border-color:var(--signal)}
-button:focus-visible{outline:2px solid var(--signal); outline-offset:2px}
-button[aria-pressed=true]{border-color:var(--signal); color:var(--signal)}
-button.danger{border-color:#5a3434; color:#f0a3a3} button.danger:hover{border-color:var(--bad)}
-button.danger:focus-visible{outline:2px solid var(--bad); outline-offset:2px}
-pre{background:var(--inset); border:1px solid var(--seam); border-radius:7px; padding:11px 13px;
-  overflow-x:auto; font-size:12.5px; margin:0;
-  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-details{margin-top:11px} details summary{cursor:pointer; color:var(--faint); font-size:12.5px}
-.disc{display:grid; grid-template-columns:1fr 1fr 1fr; gap:11px; margin-bottom:12px}
+/* Data surfaces invert: dark cards read as code blocks */
+.dark{background:var(--dark); color:#fff; border-radius:var(--r-lg)}
+.dark .card-title{color:#fff}
+.card{background:var(--card); border:1px solid var(--hairline); border-radius:var(--r-lg); padding:24px;
+  transition:box-shadow .18s ease, border-color .18s ease}
+.card.hoverable:hover{box-shadow:0 4px 12px rgba(0,0,0,.04); border-color:var(--hairline-strong)}
+.card-title{font-size:18px; line-height:1.4; margin-bottom:8px}
+.card p{font-size:14px; margin:0}
+.grid3{display:grid; grid-template-columns:repeat(3,1fr); gap:16px}
+@media (max-width:900px){.grid3{grid-template-columns:1fr}}
+.grid2{display:grid; grid-template-columns:1fr 1fr; gap:16px}
+@media (max-width:900px){.grid2{grid-template-columns:1fr}}
+pre{margin:0; padding:20px; background:var(--dark); color:#fff; border-radius:var(--r-lg);
+  overflow-x:auto; font-family:var(--mono); font-size:13px; line-height:1.5}
+pre.light{background:var(--canvas-soft); color:var(--ink); border:1px solid var(--hairline)}
+pre .k{color:#9ecbff} pre .v{color:#8ee7b5} pre .s{color:#f2c78c}
+
+/* Workflow steps: square icon plates */
+.steps{display:grid; grid-template-columns:repeat(4,1fr); gap:16px}
+@media (max-width:900px){.steps{grid-template-columns:1fr 1fr}}
+@media (max-width:560px){.steps{grid-template-columns:1fr}}
+.step{display:flex; gap:14px; align-items:flex-start}
+.step-plate{flex:none; width:32px; height:32px; border-radius:var(--r-md); background:var(--strong);
+  display:flex; align-items:center; justify-content:center; font-family:var(--mono); font-size:12px;
+  color:var(--ink)}
+.step h3{font-size:16px; margin-bottom:4px}
+.step p{font-size:14px; margin:0}
+
+input[type=text]{width:100%; height:44px; padding:0 16px; background:var(--card); color:var(--ink);
+  border:1px solid var(--hairline-strong); border-radius:var(--r-md); font-family:var(--mono); font-size:14px}
+input[type=text]:focus{outline:none; border-color:var(--ink); box-shadow:0 0 0 2px rgba(23,23,23,.08)}
+input[type=text]::placeholder{color:#6b7078}
+label.field{display:block; font-size:13px; color:var(--body); margin-bottom:6px}
+.muted{color:var(--muted); font-size:13px}
+.disc{display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin-top:16px}
 @media (max-width:760px){.disc{grid-template-columns:1fr}}
-.disc h3{margin:0 0 7px; font-size:10.5px; letter-spacing:0.1em; text-transform:uppercase; color:var(--faint)}
-.disc ul{list-style:none; margin:0; padding:0; max-height:150px; overflow-y:auto; font-size:12px;
-  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.disc li{padding:2px 0; border-bottom:1px dotted #1a212b; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
-.disc button{background:none; border:none; padding:0; color:var(--signal); font:inherit; cursor:pointer; text-align:left}
+.disc h3{font-size:11px; letter-spacing:.88px; text-transform:uppercase; color:var(--muted); margin-bottom:8px}
+.disc ul{list-style:none; margin:0; padding:0; max-height:150px; overflow-y:auto;
+  font-family:var(--mono); font-size:12.5px}
+.disc li{padding:5px 0; border-bottom:1px solid var(--hairline-soft); overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap}
+.disc button{background:none; border:none; padding:0; color:var(--link); font:inherit; cursor:pointer; text-align:left}
 .disc button:hover{text-decoration:underline}
-.bar-row{display:grid; grid-template-columns:38px 1fr 92px; gap:10px; align-items:center; margin:7px 0; font-size:12.5px}
-.bar-row .lbl{color:var(--dim); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-.bar-track{background:var(--inset); border:1px solid var(--seam); border-radius:5px; height:13px}
-.bar-fill{background:var(--signal); border-radius:4px; height:100%; width:100%;
-  transform:scaleX(0); transform-origin:left;
-  transition:transform .6s cubic-bezier(.2,.9,.25,1)}
-@media (prefers-reduced-motion:reduce){.bar-fill{transition:none}}
-.bar-row .val{text-align:right; color:var(--ink); font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
-pre.meta{background:transparent; border:none; color:var(--faint); font-size:11.5px; padding:8px 0 0; white-space:normal}
-.muted{color:var(--faint); font-size:12.5px}
-footer{margin-top:26px; padding-top:14px; border-top:1px solid var(--seam);
-  display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;
-  color:var(--faint); font-size:12.5px}
-a{color:var(--signal)}
+.bar-row{display:grid; grid-template-columns:44px 1fr 96px; gap:12px; align-items:center; margin:10px 0; font-size:14px}
+.bar-row .lbl{font-family:var(--mono); font-size:12px; color:#b0b4ba}
+.bar-track{height:8px; border-radius:var(--r-pill); background:#2b2b2b; overflow:hidden}
+.bar-fill{height:100%; width:100%; background:#fff; border-radius:var(--r-pill); transform:scaleX(0);
+  transform-origin:left; transition:transform .6s cubic-bezier(.2,.9,.25,1)}
+.bar-row .val{text-align:right; font-family:var(--mono); font-size:13px}
+details{margin-top:16px}
+details summary{cursor:pointer; font-size:14px; color:var(--body)}
+details[open] summary{margin-bottom:10px}
+.cta-band{text-align:center; padding:96px 24px}
+.cta-band h2{font-size:36px; line-height:1.15; letter-spacing:-1.08px; margin:0 auto 20px; max-width:20ch}
+.cta-band p{max-width:60ch; margin:0 auto 24px}
+.footer{background:var(--canvas); border-top:1px solid var(--hairline); padding:64px 24px}
+.footer-in{max-width:1200px; margin:0 auto; display:grid; grid-template-columns:2fr 1fr 1fr; gap:32px}
+@media (max-width:760px){.footer-in{grid-template-columns:1fr}}
+.footer h3{font-size:11px; letter-spacing:.88px; text-transform:uppercase; color:var(--muted); margin-bottom:12px}
+.footer ul{list-style:none; margin:0; padding:0}
+.footer li{margin-bottom:8px}
+.footer a{font-size:14px; color:var(--body)}
+#demobanner{max-width:1200px; margin:16px auto 0; padding:12px 16px; background:#fdf7ec;
+  border:1px solid #f2e2c4; border-radius:var(--r-md); font-size:14px; color:var(--warning)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important; animation:none!important}}
 </style>
 </head>
 <body>
-<!-- THESIS: the money in motion. Three operator lanes carry live transfers across the edge into one settlement rail; the rail is where truth is decided. Refuses the generic panel-stack console: lanes are the page, and the spine is the edge. OWN-WORLD: near-black graphite, one 2px meter per lane, operator hues (cyan/violet/mint) used only on lane state, hairline seams instead of cards-with-shadow, mono figures, no rounded-card marketing. STORY: within one viewport a reviewer sees transfers arriving, landing in a lane, and being decided settled, tolerated or exception. FIRST VIEWPORT: masthead totals, the edge spine (every request, typed), then the three lanes; the settlement dock sits below the fold. FORM: operator lanes (user-chosen over the dealt orbital world), native CSS, data-driven motion only. FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md. -->
-<div class="shell">
-<div class="mast">
-<div class="brand">
-<svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#0f131a" stroke="#1f2733"/><path d="M16 6v20M10 12h12M10 20h12" stroke="#7dd3fc" stroke-width="2" stroke-linecap="round"/><circle cx="16" cy="6" r="2.4" fill="#3fd08c"/></svg>
-<div>
-<h1>SETTLE<span>LEDGER</span></h1>
-<small>cross-operator settlement</small>
+<!-- THESIS: the product leads. The live settlement console is the hero's chrome, not a screenshot of one, and the page argues only what the console proves. OWN-WORLD: pure-white canvas with one soft sky wash behind the hero, near-black ink (#171717), black as the only fill, inline link blue (#0d74ce) for body links, Inter for text, JetBrains Mono for every code and figure surface, hairline dividers instead of stacked cards, dark inverted panels reserved for data. STORY: a reviewer reads one headline, sees transfers arriving in real operator lanes, then reads the four steps, the API, and the recovery proof. FIRST VIEWPORT: nav, headline with the sky wash, one black CTA, and the top edge of the live console. FORM: pinned to the Expo analysis (DESIGN-expo.md), adapted so the hero artifact is the running console. FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md. -->
+<nav class="nav" aria-label="Primary">
+<div class="nav-in">
+<a class="wordmark" href="#top">
+<svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#000"/><path d="M10 9h12M10 16h12M10 23h8" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>
+SettleLedger
+</a>
+<div class="nav-links">
+<a href="#console">Live traffic</a>
+<a href="#settlement">Settlement</a>
+<a href="#flow">How it settles</a>
+<a href="#drills">Drills</a>
 </div>
+<a class="btn btn-sm" href="https://github.com/Realms4239/secure-ledger#5-minute-demo-windows" target="_blank" rel="noreferrer">Run the demo</a>
 </div>
-<div class="totals" role="group" aria-label="Gateway counters">
-<div class="t-ok"><b id="n-accepted">0</b><span>accepted</span></div>
-<div class="t-warn"><b id="n-held">0</b><span>held</span></div>
-<div><b id="n-dup">0</b><span>retries</span></div>
-<div class="t-bad"><b id="n-limited">0</b><span>limited</span></div>
-</div>
-</div>
-<p id="demobanner" hidden>Recorded snapshot from 2026-10-01. Lanes, lookup and drills need a live backend. <a href="https://github.com/Realms4239/secure-ledger">Run it locally</a>.</p>
+</nav>
 
-<section class="spine" aria-label="Edge intake">
-<div class="spine-head">
-<h2>Edge</h2>
-<button id="pauseBtn" aria-pressed="false">Pause</button>
-<span class="count" id="edgecount">0 shown</span>
+<header class="hero" id="top">
+<h1>Cross-operator settlement that survives its own crashes.</h1>
+<p>A Go gateway authenticates every transfer and hands it to a Rust engine that replays an append-only log, matches operator settlement files, and proves recovery after a kill-9. Simulated MVola, Orange and Airtel traffic.</p>
+<div class="cta-row">
+<button class="btn" id="heroPause" type="button">Pause live view</button>
+<a class="btn btn-secondary" href="https://github.com/Realms4239/secure-ledger" target="_blank" rel="noreferrer">Read the source</a>
+<span class="pill" id="modePill"><span class="dot idle" id="modeDot"></span><span id="modeText">checking</span></span>
 </div>
-<div class="edge" id="edge"></div>
-</section>
+</header>
+<p id="demobanner" hidden>Recorded snapshot from 2026-10-01. Live traffic, lookup and drills need the local backend. <a href="https://github.com/Realms4239/secure-ledger#5-minute-demo-windows" target="_blank" rel="noreferrer">Run the demo locally</a>.</p>
 
+<section class="console" id="console" aria-label="Live settlement console">
+<div class="console-bar">
+<h2>Settlement console</h2>
+<div class="grow">
+<span class="count" id="edgecount">0 requests shown</span>
+<button class="btn btn-secondary btn-sm" id="pauseBtn" type="button" aria-pressed="false">Pause</button>
+</div>
+</div>
+<div class="console-body">
+<div class="edge" id="edge" aria-label="Edge intake"></div>
 <div class="lanes" role="list">
-<section class="lane" data-op="mvola" role="listitem" aria-label="MVola lane">
-<div class="lane-top"><h2>MVola</h2><span class="n" data-count>0</span></div>
+<div class="lane" data-op="mvola" role="listitem">
+<div class="lane-head"><h3>MVola</h3><span class="n" data-count>0</span></div>
 <div class="meter"><div class="meter-fill" data-meter></div></div>
 <div class="lane-body" data-body></div>
-<div class="lane-foot"><span data-sum>0</span><span data-live>0 live</span></div>
-</section>
-<section class="lane" data-op="orange" role="listitem" aria-label="Orange lane">
-<div class="lane-top"><h2>Orange</h2><span class="n" data-count>0</span></div>
+<div class="lane-foot"><span data-sum>0 minor units</span><span data-live>0 in view</span></div>
+</div>
+<div class="lane" data-op="orange" role="listitem">
+<div class="lane-head"><h3>Orange</h3><span class="n" data-count>0</span></div>
 <div class="meter"><div class="meter-fill" data-meter></div></div>
 <div class="lane-body" data-body></div>
-<div class="lane-foot"><span data-sum>0</span><span data-live>0 live</span></div>
-</section>
-<section class="lane" data-op="airtel" role="listitem" aria-label="Airtel lane">
-<div class="lane-top"><h2>Airtel</h2><span class="n" data-count>0</span></div>
+<div class="lane-foot"><span data-sum>0 minor units</span><span data-live>0 in view</span></div>
+</div>
+<div class="lane" data-op="airtel" role="listitem">
+<div class="lane-head"><h3>Airtel</h3><span class="n" data-count>0</span></div>
 <div class="meter"><div class="meter-fill" data-meter></div></div>
 <div class="lane-body" data-body></div>
-<div class="lane-foot"><span data-sum>0</span><span data-live>0 live</span></div>
+<div class="lane-foot"><span data-sum>0 minor units</span><span data-live>0 in view</span></div>
+</div>
+</div>
+</div>
 </section>
+
+<div class="band grid3" style="margin-top:48px">
+<div class="card hoverable">
+<h3 class="card-title">Nothing unauthenticated enters the ledger</h3>
+<p>Every transfer carries a signed token and an idempotency key. A retry returns the original saga instead of creating a second one; rejects and fraud holds never reach the engine at all.</p>
+</div>
+<div class="card hoverable">
+<h3 class="card-title">Deterministic replay, not hopeful recovery</h3>
+<p>The engine persists every transition to a write-ahead log and tracks its position in the event stream. Restart after a hard kill and the same sagas come back, byte for byte, proven by a scripted drill.</p>
+</div>
+<div class="card hoverable">
+<h3 class="card-title">Measured, never asserted</h3>
+<p>Latency and match rates are committed run logs with the hardware they came from. The RUSTGO performance bar is unclaimed until a run supports it, and the page says which is which.</p>
+</div>
 </div>
 
-<div class="dock">
-<section class="card" aria-label="Settlement">
-<h2>Settlement</h2>
+<section class="band" id="settlement" style="margin-top:64px">
+<div class="band-head">
+<h2>Settlement decisions, itemized</h2>
+<p>The engine matches every operator row back to the transfer that created it: exact amount, small fee tolerance, and every exception it cannot explain. Each figure below comes from the live report.</p>
+</div>
+<div class="grid2">
+<div class="card">
+<div class="card" style="border:none;padding:0">
+<h3 class="card-title">Exceptions waiting for a human</h3>
+<p class="muted">Missing rows link straight to the transfer that produced them.</p>
+</div>
 <div class="disc">
-<div><h3>Missing: transfers with no row</h3><ul id="l-missing"><li class="muted">—</li></ul></div>
-<div><h3>Orphan: rows with no transfer</h3><ul id="l-orphan"><li class="muted">—</li></ul></div>
-<div><h3>Mismatch: amounts disagree</h3><ul id="l-mismatch"><li class="muted">—</li></ul></div>
+<div><h3>Missing</h3><ul id="l-missing"><li class="muted">none</li></ul></div>
+<div><h3>Orphan</h3><ul id="l-orphan"><li class="muted">none</li></ul></div>
+<div><h3>Mismatch</h3><ul id="l-mismatch"><li class="muted">none</li></ul></div>
 </div>
-<details><summary>Raw report JSON</summary><pre id="report">No settlement processed yet.</pre></details>
+<details><summary>Raw report</summary><pre class="light" id="report">No settlement processed yet.</pre></details>
+</div>
+<div class="card dark">
+<h3 class="card-title">Measured performance</h3>
+<div id="benchbars"><p class="muted">Loading</p></div>
+<pre id="benchmeta" class="light" style="background:transparent;border:none;padding:12px 0 0;color:#b0b4ba">—</pre>
+</div>
+</div>
 </section>
 
-<div class="inspect">
-<section class="card" aria-label="Saga lookup">
-<h2>Inspect a transfer</h2>
-<div class="row">
-<input id="sagaid" type="text" placeholder="paste a txid from the missing list, or a saga id" aria-label="Saga id or txid">
-<button id="lookupBtn">Open</button>
+<section class="band" id="flow" style="margin-top:64px">
+<div class="band-head">
+<h2>How a transfer settles</h2>
+<p>Four steps, each with a runnable check behind it.</p>
 </div>
-<pre id="saga">Nothing open.</pre>
-<div class="row" style="margin-top:11px"><button id="ollBtn" aria-pressed="false">Gateway detail</button></div>
-<pre id="gw">—</pre>
+<div class="steps">
+<div class="step"><div class="step-plate">01</div><div><h3>Authenticate</h3><p>JWT plus idempotency key, rate limited per client, body and amount bounded.</p></div></div>
+<div class="step"><div class="step-plate">02</div><div><h3>Apply rules</h3><p>Velocity, new-account amount limits and cross-operator impossible hops hold traffic for review.</p></div></div>
+<div class="step"><div class="step-plate">03</div><div><h3>Log the saga</h3><p>The engine appends each transition to the write-ahead log before it is observable.</p></div></div>
+<div class="step"><div class="step-plate">04</div><div><h3>Match settlement</h3><p>Operator rows join to sagas by transaction id; exceptions queue with reasons.</p></div></div>
+</div>
+<pre style="margin-top:24px"><span class="c"># one transfer in, one saga out; the same key replays to the same saga</span>
+<span class="k">$</span> curl -X POST localhost:8080/transfers \
+    -H <span class="s">"Authorization: Bearer $JWT"</span> \
+    -H <span class="s">"Idempotency-Key: 00000000-0000-4000-8000-000000000001"</span> \
+    -d <span class="s">'{"from_account":"alice","to_account":"bob","amount":4200,"operator":"airtel","txid":"tx-1"}'</span>
+<span class="v">{"saga_id":"5a1c...","status":"accepted"}</span></pre>
 </section>
 
-<section class="card" aria-label="Measured performance">
-<h2>Measured performance</h2>
-<div id="benchbars"><p class="muted">Loading…</p></div>
-<pre id="benchmeta" class="meta">—</pre>
+<section class="band" id="drills" style="margin-top:64px">
+<div class="band-head">
+<h2>Break it on purpose</h2>
+<p>The drills exist because recovery claims without evidence are marketing.</p>
+</div>
+<div class="grid2">
+<div class="card">
+<h3 class="card-title">Inspect a transfer</h3>
+<p class="muted">Paste an id from the exception lists, or any saga id from the audit log.</p>
+<label class="field" for="sagaid">Saga id or transaction id</label>
+<input id="sagaid" type="text" placeholder="00000000-0000-4000-8000-000000000001">
+<div style="display:flex;gap:10px;margin-top:12px">
+<button class="btn btn-sm" id="lookupBtn" type="button">Open</button>
+<button class="btn btn-secondary btn-sm" id="gwBtn" type="button" aria-pressed="false">Gateway counters</button>
+</div>
+<pre style="margin-top:16px" id="saga">Nothing open yet.</pre>
+<pre style="margin-top:10px" id="gw">Gateway counters idle.</pre>
+</div>
+<div class="card">
+<h3 class="card-title">Partition and recovery</h3>
+<p class="muted">Holding traffic pauses the engine's intake exactly like a network partition, and releasing it replays the backlog. The kill-9 drill is scripted so it fails loudly.</p>
+<label class="field" for="chaostoken">Operator token</label>
+<input id="chaostoken" type="text" placeholder="mint with: loader -token alice">
+<div style="display:flex;gap:10px;margin-top:12px">
+<button class="btn btn-sm" id="ponBtn" type="button">Hold traffic</button>
+<button class="btn btn-secondary btn-sm" id="poffBtn" type="button">Release</button>
+</div>
+<button class="btn btn-secondary btn-sm" id="killBtn" type="button" style="margin-top:16px">How to run the kill-9 drill</button>
+<p class="muted" id="killnote" hidden>Stop the engine process (kill -9), start it again with the same environment, then compare the settlement report before and after. <code>scripts/recovery.ps1</code> runs it and fails if one byte differs.</p>
+</div>
+</div>
 </section>
-</div>
-</div>
 
-<section class="card" style="margin-top:16px" aria-label="Drills">
-<h2>Drills</h2>
-<p class="muted">Pause intake to simulate a network partition: the engine holds its offsets, and resuming replays the backlog. Paste an operator JWT (mint one with <code>loader -token</code>) first.</p>
-<div class="row">
-<input id="chaostoken" type="text" placeholder="operator JWT" aria-label="Operator JWT">
-<button id="ponBtn">Hold traffic</button>
-<button id="poffBtn">Release</button>
-</div>
-<button id="killBtn" class="danger">How to run the kill-9 drill</button>
-<p id="killnote" hidden class="muted">Stop the engine process (kill -9 / Stop-Process -Force), start it again with the same environment, then compare the settlement report before and after. <code>scripts/recovery.ps1</code> automates it and fails if one byte differs.</p>
+<section class="cta-band">
+<h2>Run it before you read about it</h2>
+<p>Five minutes on one machine: seed ten thousand transfers, load them through the gateway, upload the settlement file, and watch the report match the expected counts exactly.</p>
+<a class="btn" href="https://github.com/Realms4239/secure-ledger#5-minute-demo-windows" target="_blank" rel="noreferrer">Open the demo script</a>
 </section>
 
-<footer>
-<span>SettleLedger: an experimental prototype. <a href="https://github.com/Realms4239/secure-ledger">Source</a> · <a href="https://github.com/Realms4239/secure-ledger/blob/main/docs/limitations.md">Limitations</a></span>
-<span>Every number on this page is measured, or says it is not.</span>
+<footer class="footer">
+<div class="footer-in">
+<div>
+<h3>SettleLedger</h3>
+<p class="muted">An experimental settlement reconciliation prototype. Not audited, not for real money, and honest about both.</p>
+</div>
+<div>
+<h3>Repository</h3>
+<ul>
+<li><a href="https://github.com/Realms4239/secure-ledger" target="_blank" rel="noreferrer">Source</a></li>
+<li><a href="https://github.com/Realms4239/secure-ledger/blob/main/docs/architecture.md" target="_blank" rel="noreferrer">Architecture</a></li>
+<li><a href="https://github.com/Realms4239/secure-ledger/blob/main/docs/integration.md" target="_blank" rel="noreferrer">Integration</a></li>
+</ul>
+</div>
+<div>
+<h3>Project</h3>
+<ul>
+<li><a href="https://github.com/Realms4239/secure-ledger/blob/main/docs/limitations.md" target="_blank" rel="noreferrer">Limitations</a></li>
+<li><a href="https://github.com/Realms4239/secure-ledger/blob/main/SECURITY.md" target="_blank" rel="noreferrer">Security</a></li>
+<li><a href="https://github.com/Realms4239/secure-ledger/blob/main/CONTRIBUTING.md" target="_blank" rel="noreferrer">Contributing</a></li>
+</ul>
+</div>
+</div>
 </footer>
-</div>
 
 <script>
-// DEMO mode: GitHub Pages has no live backend, so the page falls back to the
-// bundled recorded snapshot and says so. Everything else stays real.
+// DEMO mode: GitHub Pages has no live backend, so the page reads the bundled
+// recorded snapshot and labels itself. Every other path is the real thing.
 const DEMO = /\.github\.io$/.test(location.hostname);
-if(DEMO) document.getElementById('demobanner').hidden = false;
-
 const edge = document.getElementById('edge');
 let edgeSeen = 0, paused = false, source = null;
 const lanes = {};
 document.querySelectorAll('.lane').forEach(l => {
   lanes[l.dataset.op] = {
-    body: l.querySelector('[data-body]'),
-    count: l.querySelector('[data-count]'),
-    meter: l.querySelector('[data-meter]'),
-    sum: l.querySelector('[data-sum]'),
-    live: l.querySelector('[data-live]'),
-    n: 0, total: 0
+    body: l.querySelector('[data-body]'), count: l.querySelector('[data-count]'),
+    meter: l.querySelector('[data-meter]'), sum: l.querySelector('[data-sum]'),
+    live: l.querySelector('[data-live]'), n: 0, total: 0
   };
 });
-const totals = {
-  accepted: document.getElementById('n-accepted'),
-  held: document.getElementById('n-held'),
-  dup: document.getElementById('n-dup'),
-  limited: document.getElementById('n-limited')
-};
-const counters = {accepted:0, held:0, dup:0, limited:0};
 const num = new Intl.NumberFormat('en-US');
 const money = n => num.format(Math.round(n));
-
-function bump(key){
-  counters[key] += 1;
-  totals[key].textContent = num.format(counters[key]);
+const setText = (id, s) => { document.getElementById(id).textContent = s; };
+function setMode(text, live){
+  setText('modeText', text);
+  document.getElementById('modeDot').className = 'dot' + (live ? '' : ' idle');
 }
-function chip(kind, label, amount, txid){
-  const el = document.createElement('div');
-  el.className = 'chip' + (kind ? ' ' + kind : '');
-  const dot = document.createElement('i');
-  el.appendChild(dot);
-  if(amount != null){
-    const code = document.createElement('code');
-    code.textContent = txid || '';
-    el.appendChild(code);
-    const amt = document.createElement('span');
-    amt.className = 'amt';
-    amt.textContent = money(amount);
-    el.appendChild(amt);
+if(DEMO){ document.getElementById('demobanner').hidden = false; setMode('recorded snapshot', false); }
+
+function chip(cls, text, code, amount){
+  const el = document.createElement('span');
+  el.className = 'chip ' + cls;
+  if(code != null){
+    const c = document.createElement('code');
+    c.textContent = code;
+    el.appendChild(c);
+    const a = document.createElement('span');
+    a.className = 'amt';
+    a.textContent = money(amount);
+    el.appendChild(a);
   } else {
-    el.appendChild(document.createTextNode(label || ''));
+    el.textContent = text;
   }
   return el;
 }
@@ -294,35 +412,43 @@ function push(el, host, cap){
   host.prepend(el);
   while(host.children.length > cap) host.lastChild.remove();
 }
+function row(code, amount){
+  const el = document.createElement('div');
+  el.className = 'lane-row';
+  const c = document.createElement('code');
+  c.textContent = code;
+  const a = document.createElement('span');
+  a.className = 'amt';
+  a.textContent = money(amount);
+  el.appendChild(c); el.appendChild(a);
+  return el;
+}
 function onEvent(raw){
   let o;
   try{ o = JSON.parse(raw); }catch(_){ return; }
   if(o.kind === 'accepted'){
-    bump('accepted');
-    push(chip(null, null, o.amount, o.txid), edge, 40);
+    push(chip('ok', null, o.txid, o.amount), edge, 40);
     const lane = lanes[(o.operator || '').toLowerCase()];
     if(lane){
       lane.n += 1; lane.total += o.amount;
-      push(chip(null, null, o.amount, o.txid), lane.body, 24);
+      push(row(o.txid, o.amount), lane.body, 18);
       lane.count.textContent = num.format(lane.n);
       lane.sum.textContent = money(lane.total) + ' minor units';
-      lane.live.textContent = num.format(lane.body.children.length) + ' live';
+      lane.live.textContent = num.format(lane.body.children.length) + ' in view';
       lane.meter.style.transform = 'scaleX(' + Math.min(1, lane.n) + ')';
     }
     edgeSeen += 1;
-    document.getElementById('edgecount').textContent = num.format(edgeSeen) + ' shown';
+    setText('edgecount', num.format(edgeSeen) + ' requests shown');
+    if(!DEMO) setMode('live', true);
   } else if(o.kind === 'held_for_review'){
-    bump('held');
-    push(chip('held', 'held: ' + (o.detail || 'rule')), edge, 40);
+    push(chip('warn', 'held for review: ' + (o.detail || 'rule')), edge, 40);
   } else if(o.kind === 'duplicate'){
-    bump('dup');
-    push(chip('dup', 'retry: ' + (o.saga_id || o.detail || '').slice(0, 12)), edge, 40);
+    push(chip('quiet', 'retry: ' + String(o.saga_id || o.detail || '').slice(0, 12)), edge, 40);
   } else if(o.kind === 'partition'){
-    push(chip(o.detail === 'on' ? 'bad' : '', 'partition ' + (o.detail || '')), edge, 40);
+    push(chip(o.detail === 'on' ? 'bad' : 'quiet', 'partition ' + (o.detail || '')), edge, 40);
   } else if(o.kind === 'settlement_uploaded'){
-    push(chip('dup', 'settlement ' + (o.saga_id || '')), edge, 40);
+    push(chip('quiet', 'settlement file ' + (o.saga_id || '')), edge, 40);
   } else if(o.kind === 'rate_limited'){
-    bump('limited');
     push(chip('bad', 'rate limited'), edge, 40);
   }
 }
@@ -330,30 +456,44 @@ function connect(){
   if(DEMO || paused) return;
   source = new EventSource('/events/stream');
   source.onmessage = e => onEvent(e.data);
-  source.onerror = () => push(chip('bad', 'stream dropped, retrying'), edge, 40);
+  source.onerror = () => { push(chip('bad', 'stream dropped, retrying'), edge, 40); setMode('reconnecting', false); };
 }
-if(DEMO) push(chip('dup', 'recorded snapshot: run locally for live traffic'), edge, 40);
+if(DEMO) push(chip('quiet', 'recorded snapshot: run the demo for live traffic'), edge, 40);
 else connect();
-document.getElementById('pauseBtn').addEventListener('click', function(){
-  paused = !paused;
-  this.textContent = paused ? 'Resume' : 'Pause';
-  this.setAttribute('aria-pressed', String(paused));
+function setPaused(next){
+  paused = next;
+  document.getElementById('pauseBtn').setAttribute('aria-pressed', String(paused));
+  setText('pauseBtn', paused ? 'Resume' : 'Pause');
+  setText('heroPause', paused ? 'Resume live view' : 'Pause live view');
   if(source){ source.close(); source = null; }
-  if(!paused) connect();
-  else push(chip('dup', 'display paused (intake continues)'), edge, 40);
-});
+  if(paused){ push(chip('quiet', 'view paused (intake continues)'), edge, 40); setMode('view paused', false); }
+  else connect();
+}
+document.getElementById('pauseBtn').addEventListener('click', () => setPaused(!paused));
+document.getElementById('heroPause').addEventListener('click', () => setPaused(!paused));
 
 function fill(id, items, clickable){
   const ul = document.getElementById(id);
   ul.replaceChildren();
-  if(!items || !items.length) return;
+  if(!items || !items.length){
+    const li = document.createElement('li');
+    li.className = 'muted';
+    li.textContent = 'none';
+    ul.appendChild(li);
+    return;
+  }
   items.slice(0, 80).forEach(v => {
     const li = document.createElement('li');
     if(clickable){
       const b = document.createElement('button');
+      b.type = 'button';
       b.textContent = v;
       b.setAttribute('aria-label', 'Inspect ' + v);
-      b.addEventListener('click', () => { document.getElementById('sagaid').value = v; doLookup(); });
+      b.addEventListener('click', () => {
+        document.getElementById('sagaid').value = v;
+        doLookup();
+        document.getElementById('sagaid').scrollIntoView({block:'center'});
+      });
       li.appendChild(b);
     } else li.textContent = v;
     ul.appendChild(li);
@@ -372,70 +512,71 @@ function renderBench(t){
   try{ o = JSON.parse(t); }catch(_){ return; }
   const host = document.getElementById('benchbars');
   if(!o.measured){
-    host.replaceChildren(Object.assign(document.createElement('p'), {className:'muted', textContent:'No measurements recorded yet.'}));
-    document.getElementById('benchmeta').textContent = o.note || '';
+    host.replaceChildren();
+    const p = document.createElement('p');
+    p.className = 'muted';
+    p.textContent = 'No measurements recorded yet.';
+    host.appendChild(p);
+    setText('benchmeta', o.note || '');
     return;
   }
   host.replaceChildren();
   const max = Math.max(o.p50_ms, o.p95_ms, o.p99_ms, 1);
   [['p50', o.p50_ms], ['p95', o.p95_ms], ['p99', o.p99_ms]].forEach(([k, v]) => {
-    const row = document.createElement('div'); row.className = 'bar-row';
+    const line = document.createElement('div');
+    line.className = 'bar-row';
     const lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.textContent = k;
     const track = document.createElement('div'); track.className = 'bar-track';
-    const fillEl = document.createElement('div'); fillEl.className = 'bar-fill';
-    fillEl.style.transform = 'scaleX(' + (v / max).toFixed(4) + ')';
-    track.appendChild(fillEl);
+    const bar = document.createElement('div'); bar.className = 'bar-fill';
+    bar.style.transform = 'scaleX(' + (v / max).toFixed(4) + ')';
+    track.appendChild(bar);
     const val = document.createElement('span'); val.className = 'val'; val.textContent = v + ' ms';
-    row.appendChild(lbl); row.appendChild(track); row.appendChild(val);
-    host.appendChild(row);
+    line.appendChild(lbl); line.appendChild(track); line.appendChild(val);
+    host.appendChild(line);
   });
-  document.getElementById('benchmeta').textContent =
-    (o.date || '') + ' · ' + (o.hardware || '') + ' · ' + (o.rps || '') + ' rps · ' + (o.match || '');
+  setText('benchmeta', [o.date, o.hardware, o.rps + ' rps', o.match].filter(Boolean).join(' · '));
 }
-function fetchText(url, el, fallback){
+function fetchText(url, id, fallback){
   return fetch(url).then(r => {
     if(!r.ok) throw new Error(String(r.status));
     return r.text();
-  }).then(t => { document.getElementById(el).textContent = t; return t; })
-    .catch(() => { document.getElementById(el).textContent = fallback; return null; });
+  }).then(t => { setText(id, t); return t; })
+    .catch(() => { setText(id, fallback); return null; });
+}
+function readMetrics(t){
+  t.split('\n').forEach(line => {
+    const [k, v] = line.split(' ');
+    if(k === 'accepted_total') setText('modeText', num.format(+v) + ' accepted');
+  });
 }
 function refresh(){
   fetchText(DEMO ? 'report.json' : '/report', 'report', 'No settlement processed yet.')
     .then(t => { if(t) renderReport(t); });
   fetchText(DEMO ? 'metrics.txt' : '/metricsz', 'gw', 'Gateway unreachable.')
-    .then(t => {
-      if(!t) return;
-      t.split('\n').forEach(line => {
-        const [k, v] = line.split(' ');
-        if(k === 'fraud_hold_total') totals.held.textContent = num.format(+v);
-        if(k === 'duplicate_key_total') totals.dup.textContent = num.format(+v);
-        if(k === 'rate_limited_total') totals.limited.textContent = num.format(+v);
-      });
-    });
-  fetch(DEMO ? 'bench.json' : '/bench-latest.json').then(r => r.text())
-    .then(renderBench).catch(() => {});
+    .then(t => { if(t) readMetrics(t); });
+  fetch(DEMO ? 'bench.json' : '/bench-latest.json').then(r => r.text()).then(renderBench).catch(() => {});
 }
 function doLookup(){
-  if(DEMO){ document.getElementById('saga').textContent = 'Lookup needs a live backend.'; return; }
+  if(DEMO){ setText('saga', 'Lookup needs the local backend. Run the demo.'); return; }
   const v = document.getElementById('sagaid').value.trim();
   if(!v) return;
-  fetchText('/sagas/' + encodeURIComponent(v), 'saga', 'Not found (or engine down).');
+  fetchText('/sagas/' + encodeURIComponent(v), 'saga', 'Not found, or the engine is down.');
 }
 document.getElementById('lookupBtn').addEventListener('click', doLookup);
 document.getElementById('sagaid').addEventListener('keydown', e => { if(e.key === 'Enter') doLookup(); });
-document.getElementById('ollBtn').addEventListener('click', function(){
-  const on = this.getAttribute('aria-pressed') !== 'true';
-  this.setAttribute('aria-pressed', String(on));
-  this.textContent = on ? 'Gateway counters' : 'Gateway detail';
+document.getElementById('gwBtn').addEventListener('click', () => {
   fetchText(DEMO ? 'metrics.txt' : '/metricsz', 'gw', 'Gateway unreachable.');
 });
 document.getElementById('killBtn').addEventListener('click', () => { document.getElementById('killnote').hidden = false; });
 function chaos(on){
   if(DEMO) return;
   const tok = document.getElementById('chaostoken').value.trim();
-  fetch('/chaos/partition', {method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+ tok},
-    body: JSON.stringify({on})})
-    .then(r => r.text()).then(t => push(chip(on ? 'bad' : '', 'partition: ' + t), edge, 40))
+  fetch('/chaos/partition', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok},
+    body: JSON.stringify({on})
+  }).then(r => r.text())
+    .then(t => push(chip(on ? 'bad' : 'quiet', 'partition: ' + t), edge, 40))
     .catch(() => push(chip('bad', 'partition switch failed'), edge, 40));
 }
 document.getElementById('ponBtn').addEventListener('click', () => chaos(true));
