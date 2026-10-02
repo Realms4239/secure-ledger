@@ -20,6 +20,14 @@ fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
+// Polling cadences in one place: consumer backoff, sweep rhythm, PG mirror.
+const RETRY_WAIT: Duration = Duration::from_secs(1);
+const EMPTY_POLL: Duration = Duration::from_millis(1);
+const ERROR_BACKOFF: Duration = Duration::from_millis(100);
+const SWEEP_EVERY: Duration = Duration::from_secs(5);
+const PG_FLUSH_EVERY: Duration = Duration::from_secs(2);
+const PG_RETRY_EVERY: Duration = Duration::from_secs(10);
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wal_path = PathBuf::from(env_or("WAL_PATH", "data/wal.log"));
@@ -105,12 +113,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok((sink, _conn)) => {
                     if let Err(e) = sink.ensure_schema().await {
                         eprintln!("engine: pg degraded (schema: {e}); retry in 10s");
-                        tokio::time::sleep(Duration::from_secs(10)).await;
+                        tokio::time::sleep(PG_RETRY_EVERY).await;
                         continue;
                     }
                     println!("engine: pg mirror live");
                     loop {
-                        tokio::time::sleep(Duration::from_secs(2)).await;
+                        tokio::time::sleep(PG_FLUSH_EVERY).await;
                         let snaps: Vec<crate::saga::Saga> = match pg_store.lock() {
                             Ok(g) => g.sagas().cloned().collect(),
                             Err(_) => return, // poisoned
@@ -130,7 +138,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 Err(e) => {
                     eprintln!("engine: pg degraded (connect: {e}); retry in 10s");
-                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    tokio::time::sleep(PG_RETRY_EVERY).await;
                 }
             }
         }
@@ -199,7 +207,7 @@ fn run_file_consumer(
             Ok(t) => break t,
             Err(e) => {
                 eprintln!("engine: events file not ready ({e}), retrying in 1s");
-                std::thread::sleep(Duration::from_secs(1));
+                std::thread::sleep(RETRY_WAIT);
             }
         }
     };
@@ -212,7 +220,7 @@ fn run_file_consumer(
                 eprintln!("engine: partition ON — intake paused");
                 apart = true;
             }
-            std::thread::sleep(Duration::from_secs(1));
+            std::thread::sleep(RETRY_WAIT);
             continue;
         } else if apart {
             eprintln!("engine: partition OFF — catch-up replay");
@@ -229,13 +237,13 @@ fn run_file_consumer(
                     // consumed; keep going (same rule as ring consumer)
                 }
             }
-            Ok(None) => std::thread::sleep(Duration::from_millis(1)),
+            Ok(None) => std::thread::sleep(EMPTY_POLL),
             Err(TailError::CorruptLine(n)) => {
                 eprintln!("engine: corrupt file line {n}; skipped, offset advanced");
             }
             Err(e) => {
                 eprintln!("engine: tail read error: {e}");
-                std::thread::sleep(Duration::from_millis(100));
+                std::thread::sleep(ERROR_BACKOFF);
             }
         }
     }
@@ -254,7 +262,7 @@ fn run_settlement_sweep(dir: PathBuf, report: PathBuf, store: Arc<Mutex<SagaStor
     // Re-matching is idempotent — step notes dedupe, the report rewrites.
     let mut seen: Vec<PathBuf> = Vec::new();
     loop {
-        std::thread::sleep(Duration::from_secs(5));
+        std::thread::sleep(SWEEP_EVERY);
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -332,7 +340,7 @@ fn run_ring_consumer(ring_path: PathBuf, store: Arc<Mutex<SagaStore>>) {
             Ok(r) => break r,
             Err(e) => {
                 eprintln!("engine: ring not ready ({e}), retrying in 1s");
-                std::thread::sleep(Duration::from_secs(1));
+                std::thread::sleep(RETRY_WAIT);
             }
         }
     };
@@ -361,14 +369,14 @@ fn run_ring_consumer(ring_path: PathBuf, store: Arc<Mutex<SagaStore>>) {
                     }
                 }
             }
-            Ok(None) => std::thread::sleep(Duration::from_millis(1)),
+            Ok(None) => std::thread::sleep(EMPTY_POLL),
             Err(ring::RingError::CorruptSlot(idx, why)) => {
                 eprintln!("engine: corrupt slot at {idx}: {why}");
                 // tail already advanced inside reader
             }
             Err(e) => {
                 eprintln!("engine: ring read error: {e}");
-                std::thread::sleep(Duration::from_millis(100));
+                std::thread::sleep(ERROR_BACKOFF);
             }
         }
     }

@@ -24,6 +24,14 @@ import (
 
 const defaultRingSlots = 1 << 20 // 1M slots = 256MB, per plan
 
+// HTTP server timeouts: headers/read/idle bound the slow-loris surface.
+// No write timeout — SSE streams live indefinitely.
+const (
+	readHeaderTimeout = 5 * time.Second
+	readTimeout       = 10 * time.Second
+	idleTimeout       = 60 * time.Second
+)
+
 func rateLimitRPS() float64 {
 	if v := os.Getenv("RATE_LIMIT_RPS"); v != "" {
 		var f float64
@@ -135,9 +143,9 @@ func main() {
 	// slow-loris surface instead; per-route write deadlines are future work.
 	srv := &http.Server{
 		Addr: gatewayAddr, Handler: mux,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       readTimeout,
+		IdleTimeout:       idleTimeout,
 	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()

@@ -129,6 +129,8 @@ input[type=text]{width:100%; height:42px; padding:0 12px; background:var(--card)
 input[type=text]:focus{outline:2px solid var(--link); outline-offset:1px}
 input[type=text]::placeholder{color:#6b7078}
 .btnrow{display:flex; gap:10px; margin-top:12px; flex-wrap:wrap}
+.frow{display:flex; gap:10px; max-width:640px}
+.frow input{flex:1}
 button{font-family:var(--sans); font-size:13.5px; font-weight:600; height:38px; padding:0 16px;
   border-radius:3px; border:1px solid var(--rule-strong); background:var(--ink); color:#fff; cursor:pointer}
 button:hover{background:#000}
@@ -253,13 +255,12 @@ details{margin-top:12px} details summary{cursor:pointer; font-size:13.5px; color
 
 <section class="rule-sec" aria-label="Inspect a transfer">
 <h2>Inspect</h2>
-<div class="row" style="display:flex;gap:10px;max-width:640px">
-<input id="sagaid" type="text" placeholder="saga id, or a txid from the missing list" aria-label="Saga id or txid" style="flex:1">
+<div class="frow">
+<input id="sagaid" type="text" placeholder="saga id, or a txid from the missing list" aria-label="Saga id or txid">
 <button id="lookupBtn" type="button">Open entry</button>
 </div>
 <pre id="saga">Nothing open.</pre>
 <pre id="gw" style="margin-top:10px">Gateway counters idle.</pre>
-<button id="gwBtn" type="button" class="secondary" style="margin-top:10px" aria-pressed="false">Show gateway counters</button>
 </section>
 
 <section class="rule-sec" id="drills" aria-label="Drills">
@@ -270,8 +271,8 @@ details{margin-top:12px} details summary{cursor:pointer; font-size:13.5px; color
 <div><b id="blockstate">Line clear</b><br><span id="blocknote">Intake flowing. Holding traffic occupies the block.</span></div>
 </div>
 <label class="field" for="chaostoken">Operator token (mint with <code>loader -token alice</code>)</label>
-<div class="row" style="display:flex;gap:10px;max-width:640px">
-<input id="chaostoken" type="text" placeholder="operator JWT" aria-label="Operator JWT" style="flex:1">
+<div class="frow">
+<input id="chaostoken" type="text" placeholder="operator JWT" aria-label="Operator JWT">
 </div>
 <div class="btnrow">
 <button id="ponBtn" type="button">Occupy the block</button>
@@ -482,7 +483,7 @@ function renderBench(t){
     line.appendChild(lbl); line.appendChild(track); line.appendChild(val);
     host.appendChild(line);
   });
-  setText('benchmeta', [o.date, o.hardware, o.rps + ' rps', o.match].filter(Boolean).join(' · '));
+  setText('benchmeta', [o.date, o.hardware, o.rps == null ? null : o.rps + ' rps', o.match].filter(Boolean).join(' · '));
 }
 function fetchText(url, id, fallback){
   return fetch(url).then(r => {
@@ -495,7 +496,8 @@ function refresh(){
   fetchText(DEMO ? 'report.json' : '/report', 'report', 'No settlement processed yet.')
     .then(t => { if(t) renderReport(t); });
   fetchText(DEMO ? 'metrics.txt' : '/metricsz', 'gw', 'Gateway unreachable.');
-  fetch(DEMO ? 'bench.json' : '/bench-latest.json').then(r => r.text()).then(renderBench).catch(() => {});
+  fetch(DEMO ? 'bench.json' : '/bench-latest.json').then(r => r.text()).then(renderBench)
+    .catch(() => { setText('benchmeta', 'Bench data unreachable.'); });
 }
 function doLookup(){
   if(DEMO){ setText('saga', 'Lookup needs the local backend. Run the demo.'); return; }
@@ -505,9 +507,6 @@ function doLookup(){
 }
 document.getElementById('lookupBtn').addEventListener('click', doLookup);
 document.getElementById('sagaid').addEventListener('keydown', e => { if(e.key === 'Enter') doLookup(); });
-document.getElementById('gwBtn').addEventListener('click', () => {
-  fetchText(DEMO ? 'metrics.txt' : '/metricsz', 'gw', 'Gateway unreachable.');
-});
 document.getElementById('killBtn').addEventListener('click', () => { document.getElementById('killnote').hidden = false; });
 function chaos(on){
   if(DEMO) return;

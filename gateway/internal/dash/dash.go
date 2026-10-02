@@ -20,14 +20,21 @@ type Hub struct {
 	recent []string
 }
 
+// SSE tuning in one place: replay depth, per-client buffer, heartbeat.
+const (
+	hubReplayDepth  = 8
+	hubChanCap      = 16
+	heartbeatEvery  = 15 * time.Second
+)
+
 func NewHub() *Hub { return &Hub{subs: make(map[chan string]struct{})} }
 
 func (h *Hub) Publish(eventJSON string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.recent = append(h.recent, eventJSON)
-	if len(h.recent) > 8 {
-		h.recent = h.recent[len(h.recent)-8:]
+	if len(h.recent) > hubReplayDepth {
+		h.recent = h.recent[len(h.recent)-hubReplayDepth:]
 	}
 	for ch := range h.subs {
 		select {
@@ -40,7 +47,7 @@ func (h *Hub) Publish(eventJSON string) {
 func (h *Hub) Subscribe() (chan string, func()) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	ch := make(chan string, 16)
+	ch := make(chan string, hubChanCap)
 	for _, e := range h.recent {
 		ch <- e
 	}
@@ -93,7 +100,7 @@ func (h *Hub) handleStream(w http.ResponseWriter, r *http.Request) {
 	// them until the first event) and tells the dashboard the wire is live.
 	_, _ = fmt.Fprint(w, ": connected\n\n")
 	fl.Flush()
-	heartbeat := time.NewTicker(15 * time.Second)
+	heartbeat := time.NewTicker(heartbeatEvery)
 	defer heartbeat.Stop()
 	for {
 		select {

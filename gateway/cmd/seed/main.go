@@ -48,6 +48,12 @@ func main() {
 	flag.Parse()
 
 	const toleratedN, mismatchN, missingN = 150, 25, 20
+	// Sender pool sized so bulk traffic stays under the velocity cap
+	// (5/min/sender): n=10000 over 2000 wallets ≈ 5 each. Operator is
+	// stable per sender so the geo rule (humans, not loads) never trips.
+	const senderPool = 2000
+	// 8ms apart: the whole stream fits inside the 5-minute match skew.
+	const tsSpacingNs = 8_000_000
 	exactN := *n - toleratedN - mismatchN - missingN
 	if exactN < 0 {
 		fmt.Fprintln(os.Stderr, "seed: -n too small for fixed anomaly counts")
@@ -65,16 +71,15 @@ func main() {
 	var mismatchTx []string
 
 	emit := func(i int, kind string, amount, fee int, withRow bool) {
-		// Sender rotation (2000 wallets, ~5 transfers each) with a stable
-		// operator per sender: bulk seed traffic stays under the velocity
-		// cap and never trips the geo rule, which targets humans, not loads.
-		// Duplicate-key retries are unaffected (gateway answers 409 before
-		// fraud scoring).
-		senderIdx := i % 2000
+		// Sender rotation with a stable operator per sender: bulk seed
+		// traffic stays under the velocity cap and never trips the geo
+		// rule, which targets humans, not loads. Duplicate-key retries are
+		// unaffected (gateway answers 409 before fraud scoring).
+		senderIdx := i % senderPool
 		from := fmt.Sprintf("user%04d", senderIdx)
-		to := fmt.Sprintf("user%04d", rng.Intn(2000))
+		to := fmt.Sprintf("user%04d", rng.Intn(senderPool))
 		for to == from {
-			to = fmt.Sprintf("user%04d", rng.Intn(2000))
+			to = fmt.Sprintf("user%04d", rng.Intn(senderPool))
 		}
 		op := operators[senderIdx%len(operators)]
 		txid := fmt.Sprintf("tx-%06d", i)
@@ -96,7 +101,7 @@ func main() {
 			rowAmt = amount + 5000
 			mismatchTx = append(mismatchTx, txid)
 		}
-		ts := nowGen + int64(i)*8_000_000
+		ts := nowGen + int64(i)*tsSpacingNs
 		csvRows = append(csvRows, fmt.Sprintf("%s,%s,%s,%s,%d,%d,%d",
 			op, txid, from, to, rowAmt, fee, ts))
 	}
@@ -128,7 +133,7 @@ func main() {
 		orphanTx = append(orphanTx, txid)
 		csvRows = append(csvRows, fmt.Sprintf("%s,%s,ghost%d,user%03d,%d,0,%d",
 			operators[rng.Intn(len(operators))], txid, k, rng.Intn(200),
-			100+rng.Intn(49900), nowGen+int64(idx+k)*8_000_000))
+			100+rng.Intn(49900), nowGen+int64(idx+k)*tsSpacingNs))
 	}
 
 	writeLines := func(name string, lines []string) {
