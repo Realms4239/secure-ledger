@@ -10,6 +10,14 @@ const velocityWindowSec = 60
 const velocityMax = 5
 const geoImpossibleSec = 30
 
+// New-account amount caps in minor units by account age.
+const (
+	newAccountDays   = 30
+	newAccountCap    = 50_000
+	youngAccountDays = 365
+	youngAccountCap  = 500_000
+)
+
 // VelocityExceeded reports >5 events in the trailing 60s.
 func VelocityExceeded(hist []int64, now int64) bool {
 	n := 0
@@ -24,10 +32,10 @@ func VelocityExceeded(hist []int64, now int64) bool {
 // AmountExceeds applies the static new-account table (minor units, v0).
 func AmountExceeds(amount float64, ageDays int) bool {
 	switch {
-	case ageDays < 30:
-		return amount > 50_000
-	case ageDays < 365:
-		return amount > 500_000
+	case ageDays < newAccountDays:
+		return amount > newAccountCap
+	case ageDays < youngAccountDays:
+		return amount > youngAccountCap
 	default:
 		return false
 	}

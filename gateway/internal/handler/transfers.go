@@ -40,6 +40,7 @@ const maxAmount = 999_999_999_999
 // maxBody caps JSON request bodies; the settlement CSV upload keeps its own
 // 10MB cap. Without this a single giant body can OOM the handler.
 const maxBody = 1 << 20
+const maxUploadBody = 10 << 20
 
 // StatusClient proxies saga status lookups to the engine (real gRPC impl lands in Task 7).
 type StatusClient interface {
@@ -373,7 +374,7 @@ func (h *TransfersHandler) handleSettlementUpload(w http.ResponseWriter, r *http
 		h.reject(w, start, "", http.StatusUnauthorized, "unauthorized", "invalid or missing bearer token")
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxUploadBody))
 	if err != nil || len(body) == 0 {
 		h.reject(w, start, subject, http.StatusBadRequest, "bad_request", "body must be raw settlement CSV")
 		return

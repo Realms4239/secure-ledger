@@ -65,13 +65,18 @@ try {
   }
   if (-not $ok) { Fail "gateway never healthy" }
 
-  Write-Host "== load 10100 transfers =="
+  Write-Host "== load transfers =="
   $loaderOut = Join-Path $Tmp "loader.json"
   & (Join-Path $Tmp "loader.exe") -url "http://$GwAddr" -jwt-secret $Secret -transfers (Join-Path $SeedDir "transfers.jsonl") -c 50 -out $loaderOut
   if ($LASTEXITCODE -ne 0) { Fail "loader" }
   $sum = Get-Content $loaderOut -Raw | ConvertFrom-Json
+  # Expectations derive from the seed outputs, not literals: unique keys
+  # accepted, repeated keys answered as duplicates, nothing held or errored.
+  $keys = Get-Content (Join-Path $SeedDir "transfers.jsonl") | ConvertFrom-Json | ForEach-Object { $_.key }
+  $wantAccepted = ($keys | Sort-Object -Unique).Count
+  $wantDup = $keys.Count - $wantAccepted
   Write-Host ("accepted={0} dup={1} held={2} other={3} p99={4}ms rps={5}" -f $sum.accepted, $sum.duplicate, $sum.held_for_review, $sum.other, $sum.p99_ms, $sum.rps)
-  if ($sum.accepted -ne 10000 -or $sum.duplicate -ne 100 -or $sum.held_for_review -ne 0 -or $sum.other -ne 0) {
+  if ($sum.accepted -ne $wantAccepted -or $sum.duplicate -ne $wantDup -or $sum.held_for_review -ne 0 -or $sum.other -ne 0) {
     Fail ("loader counts off: " + (Get-Content $loaderOut -Raw))
   }
 
@@ -84,11 +89,12 @@ try {
   Write-Host "== await report =="
   $rep = $null
   # Slow disks need room: engine fsyncs every WAL record (per-record
-  # durability is the point), so the tail allows six minutes.
+  # durability is the point), so the tail allows six minutes. The bar is the
+  # seeded total, not a literal: every posted unique transfer must resolve.
   for ($i = 0; $i -lt 72; $i++) {
     Start-Sleep 5
     try { $rep = Invoke-RestMethod "http://$GwAddr/report" } catch { continue }
-    if ($rep.report.settled + $rep.report.tolerated + $rep.report.missing.Count + $rep.report.orphan.Count + $rep.report.mismatch.Count -ge 10000) { break }
+    if ($rep.report.settled + $rep.report.tolerated + $rep.report.missing.Count + $rep.report.orphan.Count + $rep.report.mismatch.Count -ge $wantAccepted) { break }
     $rep = $null
   }
   if ($null -eq $rep) { Fail "report never completed" }
