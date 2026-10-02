@@ -1,65 +1,65 @@
-# DESIGN.md — SettleLedger dashboard
+# DESIGN.md — SettleLedger folio
 
-Ground truth from the built world (`gateway/internal/dash/web/dashboard.html`),
-pinned to the Expo analysis in `DESIGN-expo.md` and adapted so the hero artifact
-is the running console rather than a device mockup.
+Ground truth from the built world (`gateway/internal/dash/web/dashboard.html`):
+a clearing-house ledger folio. Ruled paper, folio stamps and running totals
+replace both the SaaS marketing anatomy (rejected as boilerplate) and the
+generic dark console. The money is the display type; states arrive as stamps.
 
 ## World in one line
-Pure-white canvas, near-black ink, one soft sky wash behind the hero, black as
-the only fill, hairline dividers instead of stacked cards, dark panels reserved
-for data, Inter for text and JetBrains Mono for every figure and code surface.
+Warm paper, ink-black ruling with single and double rules doing all
+hierarchy, tabular JetBrains Mono figures, bordered letterspaced stamps for
+state, operator monograms instead of hue coding, radius capped at 4px.
 
 ## Tokens (as built)
 ```
-canvas #ffffff   canvas-soft #fafafa   card #ffffff    strong #f0f0f3
-ink    #171717   body #60646c          muted #8a8f98
-link   #0d74ce   dark #171717          dark-elev #1a1a1a
-success #16a34a  warning #ab6400       error #eb8e90
-hairline #f0f0f3  hairline-soft #f5f5f7  hairline-strong #dcdee0
-wash    #cfe7ff → #dcecff → transparent (hero only)
-sans 'Inter', -apple-system, system-ui, sans-serif
-mono 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace
-radius xs 4 · sm 6 · md 8 · lg 12 · xl 16 · pill 9999
+paper #fbfaf7   paper-dim #f4f1ea   card #fffdf9
+ink #1a1815     body #4a463d        faint #8b8474
+rule #e3ddd0    rule-faint #efeadd  rule-strong #1a1815
+ok #1e7a46      warn #9a6a1a        bad #a02c2c   link #1d4ed8
+sans Inter stack · mono JetBrains Mono stack
+radius 2-4px (stamps 2-3px, inputs/buttons 3px, code 4px)
 ```
-Two documented departures from the source analysis, both for contrast:
-muted is `#8a8f98` (the source `#999999` is 2.9:1 on white) and placeholders are
-`#6b7078` (4.6:1). Everything else follows the brief verbatim.
+Body text never sets below `#4a463d` (7.5:1 on paper); faint gray is reserved
+for datelines, captions and empty states. Link blue passes AA on paper.
 
 ## Type scale (as built)
-display 36/1.15/-1.08px (28px below 1024) · section head 22/1.25/-0.5px ·
-card title 18/1.4 · body 16/1.5 · small 14/1.5 · caption 13/1.4 ·
-caption-uppercase 11/1.4/+0.88px · code 13/1.5 mono · button 14/1.0.
-Weights stay in the 400–600 band; display never drops below 600.
+Nameplate 30px/+.22em · display numerals 34px mono · section heads 13px
+uppercase/+.16em · card titles and body 14-15px/1.55 · captions 12.5px ·
+mono figures 12.5px. Weight never leaves 400–700; emphasis is weight or size.
 
 ## Layout rhythm
-1200px content width. Hero 72px top padding, 460px wash, headline max 18ch,
-subhead max 60ch. Bands separated by 48–64px. Three lanes collapse 3-up → 1-up
-at 900px; exception lists 3-up → 1-up at 760px; footer 3-column → 1-column at
-760px; nav links hidden below 860px with the CTA kept.
+1180px folio width. Masthead with a 3px double rule under; totals strip with
+single rule above and double rule below; sections 44px apart, each opened by
+an uppercase head and one standfirst line. Operator columns share one ruled
+frame with hairline gutters. Mobile: totals 2-up, lanes and lists stack.
 
-## Components
-- **nav** 64px, white, hairline bottom, wordmark left, four links, black CTA.
-- **btn** black fill, 8px radius, 40px (34px small); secondary is a white card
-  with a strong hairline; pressed state `#1a1a1a`; focus ring is link blue.
-- **pill** status only (mode indicator), never a CTA.
-- **console** 16px radius, hairline, one soft shadow, the page's chrome.
-- **chip** 30px pill; tinted surfaces carry state (success/warning/error) with
-  the figure in the same hue; quiet chips are canvas-soft with a hairline.
-- **lane** 12px card with a 4px ink meter that scales on `transform`.
-- **dark card** 12px inversion used only for data surfaces (bench panel,
-  JSON, saga detail, code).
-- **step** 32px square plate in `--strong` with a mono number.
-- **bar row** 8px track, white fill on dark, label and value in mono.
+## Signature devices
+- **Masthead**: nameplate + live/recorded stamp + dateline with folio number
+  (Nºyyyymmdd, real date) + one-line deck. No nav, no CTA band.
+- **Running totals**: accepted / held / retries / limited as 34px mono
+  numerals closed by a double rule — the money is the display type.
+- **Postings tape**: every edge request as a ruled line with a stamp
+  (posted/held/retry/limited/clear/filed), txid in mono, amount right.
+- **Operator columns**: monogram plates (MV/OR/AT), per-column count, a 3px
+  ink meter scaling on `transform`, ruled rows, sub-ledger foot with count
+  and minor-unit sum.
+- **The close**: folio table with right-aligned mono figures, exceptions as
+  three ruled lists (missing rows link into lookup), decided-row total under
+  a double rule, raw report behind a disclosure.
+- **Signal-box block**: lamp + CLEAR/OCCUPIED instrument for the partition
+  drill, fused from the dealt direction the roll refused to build whole.
+- **Code and lookup panels**: dark ink inversion kept only for machine
+  surfaces (raw JSON, saga detail, curl), matching the repo's docs voice.
 
 ## Rules this surface keeps
-Black is the only fill. Link blue never appears on a button. Pills are for
-status only. Every meter and bar animates on `transform`, never `width`.
-Motion is one authored moment (data arriving) plus bar growth, both gated by
-`prefers-reduced-motion`. Numbers are mono; prose is Inter. No icon font: the
-three marks are authored inline SVG at one stroke weight.
+No gradients, no shadows, no cards-with-shadow, no pills (stamps are
+bordered rectangles), no saturated fills. Meters and bars animate on
+`transform` only. Motion is one authored moment (data arriving), gated by
+`prefers-reduced-motion`. Numbers are mono; prose is Inter. Inline SVG only
+for the favicon; no icon font. Every figure is measured or labeled.
 
-## Known departures from the source analysis
-The device-mockup hero becomes the live console (the artifact leads rather than
-a photograph of it). Dark inversion is used for data panels instead of marketing
-cards. Fonts are referenced by stack, not self-hosted, until the repo carries a
-webfont directory.
+## Known positions
+Serif was considered for the nameplate (ledger heritage) and refused: the
+numbers already carry the typographic identity, and a display serif would
+fight the mono figures. Dark mode was refused: the paper is the brand.
+Photography and illustration were refused: the live ledger is the imagery.

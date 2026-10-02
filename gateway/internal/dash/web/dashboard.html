@@ -3,375 +3,293 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SettleLedger — settlement reconciliation, live</title>
+<title>SettleLedger — settlement folio, live</title>
 <meta name="description" content="Cross-operator mobile-money settlement reconciliation: a Go gateway and a Rust engine that replay, match and settle operator files with deterministic recovery.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23000'/%3E%3Cpath d='M10 9h12M10 16h12M10 23h8' stroke='%23fff' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23fbfaf7'/%3E%3Cpath d='M8 10h16M8 16h16M8 22h10' stroke='%231a1815' stroke-width='2.2' stroke-linecap='square'/%3E%3Crect x='20' y='18' width='7' height='7' fill='none' stroke='%231e7a46' stroke-width='1.6'/%3E%3C/svg%3E">
 <style>
 :root{
-  --canvas:#ffffff; --canvas-soft:#fafafa; --card:#ffffff; --strong:#f0f0f3;
-  --dark:#171717; --dark-elev:#1a1a1a;
-  --ink:#171717; --body:#60646c; --muted:#8a8f98;
-  --link:#0d74ce; --success:#16a34a; --warning:#ab6400; --error:#eb8e90;
-  --hairline:#f0f0f3; --hairline-soft:#f5f5f7; --hairline-strong:#dcdee0;
+  --paper:#fbfaf7; --paper-dim:#f4f1ea; --card:#fffdf9;
+  --ink:#1a1815; --body:#4a463d; --faint:#8b8474;
+  --rule:#e3ddd0; --rule-strong:#1a1815; --rule-faint:#efeadd;
+  --ok:#1e7a46; --warn:#9a6a1a; --bad:#a02c2c; --link:#1d4ed8;
   --sans:'Inter',-apple-system,system-ui,'Segoe UI',sans-serif;
   --mono:'JetBrains Mono','Fira Code',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  --r-xs:4px; --r-sm:6px; --r-md:8px; --r-lg:12px; --r-xl:16px; --r-pill:9999px;
 }
 *{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
-body{margin:0; background:var(--canvas); color:var(--body); font-family:var(--sans);
-  font-size:16px; line-height:1.5; letter-spacing:0}
+body{margin:0; background:var(--paper); color:var(--body); font-family:var(--sans);
+  font-size:15px; line-height:1.55}
 h1,h2,h3{color:var(--ink); margin:0; font-weight:600}
 a{color:var(--link); text-decoration:none}
 a:hover{text-decoration:underline}
-code,kbd,.mono{font-family:var(--mono); font-size:13px; line-height:1.5}
+.folio{max-width:1180px; margin:0 auto; padding:0 24px 72px}
 
-/* Top navigation: 64px, white, hairline under */
-.nav{height:64px; background:var(--canvas); border-bottom:1px solid var(--hairline);
-  position:sticky; top:0; z-index:20}
-.nav-in{max-width:1200px; margin:0 auto; height:100%; padding:0 24px;
-  display:flex; align-items:center; gap:28px}
-.wordmark{display:flex; align-items:center; gap:9px; color:var(--ink); font-weight:600; font-size:15px;
-  letter-spacing:-0.01em}
-.wordmark:hover{text-decoration:none}
-.wordmark svg{flex:none}
-.nav-links{display:flex; gap:22px; margin-right:auto}
-.nav-links a{color:var(--body); font-size:14px; font-weight:500}
-.nav-links a:hover{color:var(--ink)}
-@media (max-width:860px){.nav-links{display:none}}
-
-/* Buttons: black is the only fill, 8px radius, 40px tall */
-.btn{display:inline-flex; align-items:center; justify-content:center; height:40px; padding:0 18px;
-  font-family:var(--sans); font-size:14px; font-weight:500; border-radius:var(--r-md);
-  border:1px solid transparent; background:var(--ink); color:#fff; cursor:pointer;
-  transition:background .15s ease}
-.btn:hover{background:#1a1a1a}
-.btn:active{background:#000}
-.btn:focus-visible{outline:2px solid var(--link); outline-offset:2px}
-.btn-secondary{background:var(--card); color:var(--ink); border-color:var(--hairline-strong)}
-.btn-secondary:hover{background:var(--canvas-soft); border-color:var(--muted)}
-.btn-sm{height:34px; padding:0 14px; font-size:13px}
-.pill{display:inline-flex; align-items:center; gap:7px; height:28px; padding:0 12px; border-radius:var(--r-pill);
-  background:var(--strong); color:var(--ink); font-size:11px; font-weight:600; letter-spacing:0.88px;
+/* Masthead: nameplate, dateline, folio line — like a financial broadsheet */
+.masthead{border-bottom:3px double var(--rule-strong); padding:26px 0 14px}
+.masthead .plate{display:flex; align-items:baseline; gap:16px; flex-wrap:wrap}
+.masthead h1{font-size:30px; letter-spacing:.22em; font-weight:700}
+.masthead h1 span{font-weight:400}
+.dateline{display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;
+  margin-top:10px; font-size:12.5px; color:var(--faint); letter-spacing:.06em;
   text-transform:uppercase}
-.dot{width:7px; height:7px; border-radius:50%; background:var(--success)}
-.dot.idle{background:var(--muted)}
+.dateline .folio-no{font-family:var(--mono)}
+.stamp{display:inline-block; border:1.5px solid currentColor; border-radius:3px;
+  padding:2px 9px; font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase}
+.stamp.live{color:var(--ok)} .stamp.recorded{color:var(--warn)}
+.dek{font-size:15px; max-width:64ch; margin:14px 0 0}
 
-/* Hero: white canvas with a soft sky wash, headline carries the weight */
-.hero{max-width:1200px; margin:0 auto; padding:72px 24px 40px; position:relative; overflow:hidden}
-.hero::before{content:''; position:absolute; inset:0 0 auto 0; height:460px; pointer-events:none;
-  background:linear-gradient(176deg, #cfe7ff 0%, #dcecff 26%, rgba(255,255,255,0) 88%);
-  filter:blur(2px)}
-.hero h1{position:relative; font-size:28px; line-height:1.2; letter-spacing:-0.84px; max-width:18ch}
-.hero p{position:relative; font-size:16px; max-width:60ch; margin:14px 0 22px}
-.hero .cta-row{position:relative; display:flex; gap:12px; flex-wrap:wrap; align-items:center}
-@media (min-width:1024px){.hero h1{font-size:36px; line-height:1.15; letter-spacing:-1.08px}}
+/* Running totals: the money is the display type */
+.totals{display:grid; grid-template-columns:repeat(4,1fr); gap:0; margin:26px 0 0;
+  border-top:1px solid var(--rule-strong); border-bottom:3px double var(--rule-strong)}
+@media (max-width:760px){.totals{grid-template-columns:repeat(2,1fr)}}
+.totals div{padding:14px 18px 12px; border-left:1px solid var(--rule)}
+.totals div:first-child{border-left:none}
+@media (max-width:760px){.totals div:nth-child(3){border-left:none}
+  .totals div:nth-child(n+3){border-top:1px solid var(--rule)}}
+.totals b{display:block; font-family:var(--mono); font-size:34px; font-weight:400;
+  letter-spacing:-0.02em; color:var(--ink); line-height:1.1}
+.totals span{font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:var(--faint)}
 
-/* Section rhythm */
-.band{max-width:1200px; margin:0 auto; padding:0 24px}
-.band + .band{margin-top:48px}
-.band-head{margin-bottom:22px}
-.band-head h2{font-size:22px; line-height:1.25; letter-spacing:-0.5px}
-.band-head p{font-size:14px; color:var(--body); max-width:68ch; margin:8px 0 0}
+/* Ruled sections */
+.rule-sec{margin-top:44px}
+.rule-sec > h2{font-size:13px; letter-spacing:.16em; text-transform:uppercase; color:var(--body);
+  margin-bottom:4px}
+.rule-sec > p.standfirst{font-size:14px; max-width:68ch; margin:0 0 16px}
+.ledger{border-top:1px solid var(--rule-strong); border-bottom:3px double var(--rule-strong)}
+.ledger .rowline{display:flex; align-items:center; gap:12px; padding:8px 2px;
+  border-bottom:1px solid var(--rule-faint); font-size:13.5px; min-height:34px}
+.ledger .rowline:last-child{border-bottom:none}
+.rowline code{font-family:var(--mono); font-size:12.5px; color:var(--ink)}
+.rowline .amt{margin-left:auto; font-family:var(--mono); color:var(--body); white-space:nowrap}
+.rowline .st{font-size:10px; font-weight:700; letter-spacing:.12em; text-transform:uppercase;
+  border:1px solid currentColor; border-radius:2px; padding:1px 6px; white-space:nowrap}
+.st.ok{color:var(--ok)} .st.warn{color:var(--warn)} .st.bad{color:var(--bad)} .st.dim{color:var(--faint)}
+.empty-note{color:var(--faint); font-size:13px; padding:10px 2px}
+.scroll{max-height:264px; overflow-y:auto}
 
-/* The console is the hero's chrome: a device-mockup analogue */
-.console{margin-top:40px; background:var(--card); border:1px solid var(--hairline);
-  border-radius:var(--r-xl); box-shadow:0 4px 12px rgba(0,0,0,.04); overflow:hidden}
-.console-bar{display:flex; align-items:center; gap:12px; padding:12px 18px; border-bottom:1px solid var(--hairline);
-  background:var(--canvas-soft)}
-.console-bar h2{font-size:13px; letter-spacing:.02em}
-.console-bar .grow{margin-left:auto; display:flex; align-items:center; gap:10px}
-.console-bar .count{font-family:var(--mono); font-size:12px; color:var(--muted)}
-.console-body{padding:18px}
-
-/* Edge strip: every request, typed */
-.edge{display:flex; gap:8px; overflow-x:auto; padding-bottom:6px; min-height:52px; align-items:center}
-.edge:empty::after{content:'waiting for traffic'; color:var(--muted); font-size:13px}
-.chip{flex:none; display:inline-flex; align-items:center; gap:8px; height:30px; padding:0 12px;
-  border-radius:var(--r-pill); background:var(--strong); color:var(--ink); font-size:12.5px; white-space:nowrap}
-.chip .amt{font-family:var(--mono); color:var(--body)}
-.chip.ok{background:#f0fbf4} .chip.ok .amt{color:var(--success)}
-.chip.warn{background:#fdf7ec} .chip.warn .amt{color:var(--warning)}
-.chip.bad{background:#fdf0f0} .chip.bad .amt{color:var(--error)}
-.chip.quiet{background:var(--canvas-soft); color:var(--body); border:1px solid var(--hairline)}
-.chip code{font-size:12px}
-
-/* Lanes: three operators, one row each */
-.lanes{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:22px}
+/* Operator columns keep the flow, ruled instead of carded */
+.lanes{display:grid; grid-template-columns:repeat(3,1fr); gap:0;
+  border-top:1px solid var(--rule-strong); border-bottom:3px double var(--rule-strong)}
 @media (max-width:900px){.lanes{grid-template-columns:1fr}}
-.lane{border:1px solid var(--hairline); border-radius:var(--r-lg); padding:18px 18px 16px; background:var(--card)}
-.lane-head{display:flex; align-items:center; gap:10px; margin-bottom:12px}
-.lane-head h3{font-size:16px; letter-spacing:0}
-.lane-head .n{margin-left:auto; font-family:var(--mono); font-size:12px; color:var(--muted)}
-.meter{height:4px; border-radius:var(--r-pill); background:var(--hairline-soft); overflow:hidden}
-.meter-fill{height:100%; width:100%; background:var(--ink); border-radius:var(--r-pill);
-  transform:scaleX(0); transform-origin:left; transition:transform .6s cubic-bezier(.2,.9,.25,1)}
-.lane-body{margin-top:12px; max-height:190px; overflow-y:auto; min-height:28px}
-.lane-body:empty::after{content:'no transfers yet'; color:var(--muted); font-size:13px}
-.lane-row{display:flex; align-items:center; gap:10px; padding:7px 0; border-bottom:1px solid var(--hairline-soft);
-  font-size:13px}
-.lane-row:last-child{border-bottom:none}
-.lane-row code{font-size:12px; color:var(--ink)}
-.lane-row .amt{margin-left:auto; font-family:var(--mono); color:var(--body)}
-.lane-foot{display:flex; justify-content:space-between; margin-top:12px; padding-top:12px;
-  border-top:1px solid var(--hairline); font-family:var(--mono); font-size:12px; color:var(--muted)}
+.lane{padding:14px 18px 12px; border-left:1px solid var(--rule)}
+.lane:first-child{border-left:none}
+@media (max-width:900px){.lane{border-left:none; border-top:1px solid var(--rule)}
+  .lane:first-child{border-top:none}}
+.lane-head{display:flex; align-items:baseline; gap:10px; margin-bottom:6px}
+.monogram{display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px;
+  border:1.5px solid var(--ink); border-radius:3px; font-size:11px; font-weight:700;
+  letter-spacing:.04em; color:var(--ink)}
+.lane-head h3{font-size:15px}
+.lane-head .n{margin-left:auto; font-family:var(--mono); font-size:12px; color:var(--faint)}
+.meter{height:3px; background:var(--rule-faint); margin:8px 0 4px}
+.meter-fill{height:100%; background:var(--ink); transform:scaleX(0); transform-origin:left}
+@media (prefers-reduced-motion:no-preference){.meter-fill{transition:transform .5s cubic-bezier(.2,.9,.25,1)}}
+.lane-foot{display:flex; justify-content:space-between; font-family:var(--mono); font-size:11.5px;
+  color:var(--faint); padding-top:8px; border-top:1px solid var(--rule-faint); margin-top:8px}
 
-/* Data surfaces invert: dark cards read as code blocks */
-.dark{background:var(--dark); color:#fff; border-radius:var(--r-lg)}
-.dark .card-title{color:#fff}
-.card{background:var(--card); border:1px solid var(--hairline); border-radius:var(--r-lg); padding:24px;
-  transition:box-shadow .18s ease, border-color .18s ease}
-.card.hoverable:hover{box-shadow:0 4px 12px rgba(0,0,0,.04); border-color:var(--hairline-strong)}
-.card-title{font-size:18px; line-height:1.4; margin-bottom:8px}
-.card p{font-size:14px; margin:0}
-.grid3{display:grid; grid-template-columns:repeat(3,1fr); gap:16px}
-@media (max-width:900px){.grid3{grid-template-columns:1fr}}
-.grid2{display:grid; grid-template-columns:1fr 1fr; gap:16px}
-@media (max-width:900px){.grid2{grid-template-columns:1fr}}
-pre{margin:0; padding:20px; background:var(--dark); color:#fff; border-radius:var(--r-lg);
-  overflow-x:auto; font-family:var(--mono); font-size:13px; line-height:1.5}
-pre.light{background:var(--canvas-soft); color:var(--ink); border:1px solid var(--hairline)}
-pre .k{color:#9ecbff} pre .v{color:#8ee7b5} pre .s{color:#f2c78c}
-
-/* Workflow steps: square icon plates */
-.steps{display:grid; grid-template-columns:repeat(4,1fr); gap:16px}
-@media (max-width:900px){.steps{grid-template-columns:1fr 1fr}}
-@media (max-width:560px){.steps{grid-template-columns:1fr}}
-.step{display:flex; gap:14px; align-items:flex-start}
-.step-plate{flex:none; width:32px; height:32px; border-radius:var(--r-md); background:var(--strong);
-  display:flex; align-items:center; justify-content:center; font-family:var(--mono); font-size:12px;
-  color:var(--ink)}
-.step h3{font-size:16px; margin-bottom:4px}
-.step p{font-size:14px; margin:0}
-
-input[type=text]{width:100%; height:44px; padding:0 16px; background:var(--card); color:var(--ink);
-  border:1px solid var(--hairline-strong); border-radius:var(--r-md); font-family:var(--mono); font-size:14px}
-input[type=text]:focus{outline:none; border-color:var(--ink); box-shadow:0 0 0 2px rgba(23,23,23,.08)}
-input[type=text]::placeholder{color:#6b7078}
-label.field{display:block; font-size:13px; color:var(--body); margin-bottom:6px}
-.muted{color:var(--muted); font-size:13px}
-.disc{display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin-top:16px}
-@media (max-width:760px){.disc{grid-template-columns:1fr}}
-.disc h3{font-size:11px; letter-spacing:.88px; text-transform:uppercase; color:var(--muted); margin-bottom:8px}
-.disc ul{list-style:none; margin:0; padding:0; max-height:150px; overflow-y:auto;
-  font-family:var(--mono); font-size:12.5px}
-.disc li{padding:5px 0; border-bottom:1px solid var(--hairline-soft); overflow:hidden;
+/* Folio tables: figures right, rules do the hierarchy */
+table.folio{width:100%; border-collapse:collapse; font-size:14px}
+table.folio caption{text-align:left; font-size:11px; letter-spacing:.12em; text-transform:uppercase;
+  color:var(--faint); padding-bottom:8px}
+table.folio th{font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint);
+  font-weight:600; text-align:left; padding:6px 8px 6px 0; border-bottom:1px solid var(--rule-strong)}
+table.folio td{padding:7px 8px 7px 0; border-bottom:1px solid var(--rule-faint); vertical-align:top}
+table.folio td.num, table.folio th.num{text-align:right; font-family:var(--mono); white-space:nowrap}
+table.folio tr.total td{border-bottom:none; border-top:3px double var(--rule-strong); font-weight:600; color:var(--ink)}
+#benchbars{margin-top:4px}
+.bar-row{display:grid; grid-template-columns:44px 1fr 96px; gap:12px; align-items:center;
+  margin:9px 0; font-size:13.5px}
+.bar-row .lbl{font-family:var(--mono); font-size:12px; color:var(--faint)}
+.bar-track{height:8px; border-radius:99px; background:var(--paper-dim); overflow:hidden}
+.bar-fill{height:100%; width:100%; background:var(--ink); border-radius:99px;
+  transform:scaleX(0); transform-origin:left}
+@media (prefers-reduced-motion:no-preference){.bar-fill{transition:transform .6s cubic-bezier(.2,.9,.25,1)}}
+.bar-row .val{text-align:right; font-family:var(--mono); font-size:12.5px; color:var(--ink)}
+ul.ruled{list-style:none; margin:0; padding:0; font-family:var(--mono); font-size:12.5px;
+  max-height:168px; overflow-y:auto}
+ul.ruled li{padding:5px 0; border-bottom:1px solid var(--rule-faint); overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap}
-.disc button{background:none; border:none; padding:0; color:var(--link); font:inherit; cursor:pointer; text-align:left}
-.disc button:hover{text-decoration:underline}
-.bar-row{display:grid; grid-template-columns:44px 1fr 96px; gap:12px; align-items:center; margin:10px 0; font-size:14px}
-.bar-row .lbl{font-family:var(--mono); font-size:12px; color:#b0b4ba}
-.bar-track{height:8px; border-radius:var(--r-pill); background:#2b2b2b; overflow:hidden}
-.bar-fill{height:100%; width:100%; background:#fff; border-radius:var(--r-pill); transform:scaleX(0);
-  transform-origin:left; transition:transform .6s cubic-bezier(.2,.9,.25,1)}
-.bar-row .val{text-align:right; font-family:var(--mono); font-size:13px}
-details{margin-top:16px}
-details summary{cursor:pointer; font-size:14px; color:var(--body)}
-details[open] summary{margin-bottom:10px}
-.cta-band{text-align:center; padding:96px 24px}
-.cta-band h2{font-size:36px; line-height:1.15; letter-spacing:-1.08px; margin:0 auto 20px; max-width:20ch}
-.cta-band p{max-width:60ch; margin:0 auto 24px}
-.footer{background:var(--canvas); border-top:1px solid var(--hairline); padding:64px 24px}
-.footer-in{max-width:1200px; margin:0 auto; display:grid; grid-template-columns:2fr 1fr 1fr; gap:32px}
-@media (max-width:760px){.footer-in{grid-template-columns:1fr}}
-.footer h3{font-size:11px; letter-spacing:.88px; text-transform:uppercase; color:var(--muted); margin-bottom:12px}
-.footer ul{list-style:none; margin:0; padding:0}
-.footer li{margin-bottom:8px}
-.footer a{font-size:14px; color:var(--body)}
-#demobanner{max-width:1200px; margin:16px auto 0; padding:12px 16px; background:#fdf7ec;
-  border:1px solid #f2e2c4; border-radius:var(--r-md); font-size:14px; color:var(--warning)}
+ul.ruled button{background:none; border:none; padding:0; color:var(--link); font:inherit;
+  cursor:pointer; text-align:left}
+ul.ruled button:hover{text-decoration:underline}
+.disc{display:grid; gap:14px; margin-top:14px}
+.disc h3{font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--faint); margin:0 0 6px}
+ul.ruled{list-style:none; margin:0; padding:0; font-family:var(--mono); font-size:12.5px; max-height:170px; overflow-y:auto}
+ul.ruled li{padding:5px 0; border-bottom:1px solid var(--rule-faint); overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap}
+ul.ruled button{background:none; border:none; padding:0; color:var(--link); font:inherit; cursor:pointer; text-align:left}
+ul.ruled button:hover{text-decoration:underline}
+.cols2{display:grid; grid-template-columns:1.25fr 1fr; gap:32px}
+@media (max-width:900px){.cols2{grid-template-columns:1fr}}
+
+/* Forms: ledger entries, not pills */
+label.field{display:block; font-size:12.5px; color:var(--body); margin:0 0 6px}
+input[type=text]{width:100%; height:42px; padding:0 12px; background:var(--card); color:var(--ink);
+  border:1px solid var(--rule-strong); border-radius:3px; font-family:var(--mono); font-size:13.5px}
+input[type=text]:focus{outline:2px solid var(--link); outline-offset:1px}
+input[type=text]::placeholder{color:#6b7078}
+.btnrow{display:flex; gap:10px; margin-top:12px; flex-wrap:wrap}
+button{font-family:var(--sans); font-size:13.5px; font-weight:600; height:38px; padding:0 16px;
+  border-radius:3px; border:1px solid var(--rule-strong); background:var(--ink); color:#fff; cursor:pointer}
+button:hover{background:#000}
+button:focus-visible{outline:2px solid var(--link); outline-offset:2px}
+button.secondary{background:var(--card); color:var(--ink)}
+button.secondary:hover{background:var(--paper-dim)}
+button[aria-pressed=true]{box-shadow:inset 0 0 0 1px var(--ink)}
+pre{background:var(--ink); color:#f2efe8; border-radius:4px; padding:16px 18px; overflow-x:auto;
+  font-family:var(--mono); font-size:12.5px; line-height:1.55; margin:14px 0 0}
+pre.light{background:var(--card); color:var(--ink); border:1px solid var(--rule)}
+pre .k{color:#9ecbff} pre .v{color:#8ee7b5} pre .s{color:#f2c78c}
+details{margin-top:12px} details summary{cursor:pointer; font-size:13.5px; color:var(--body)}
+.muted{color:var(--body); font-size:13px}
+
+/* Signal-box instrument for the partition drill */
+.block{display:flex; align-items:center; gap:14px; border:1px solid var(--rule-strong);
+  border-radius:3px; padding:12px 16px; margin:14px 0}
+.block .lamp{width:14px; height:14px; border-radius:50%; background:var(--ok); flex:none;
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent)}
+.block.occupied .lamp{background:var(--bad); box-shadow:0 0 0 3px color-mix(in srgb, var(--bad) 16%, transparent)}
+.block b{font-size:12px; letter-spacing:.12em; text-transform:uppercase}
+.block span{font-size:13px; color:var(--body)}
+#demobanner{border:1px solid #d9c58f; background:#fdf6e3; border-radius:3px; padding:10px 14px;
+  font-size:13.5px; color:#6b5518; margin:18px 0 0}
+.colophon{margin-top:56px; border-top:3px double var(--rule-strong); padding-top:14px;
+  display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;
+  font-size:12.5px; color:var(--faint)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important; animation:none!important}}
 </style>
 </head>
 <body>
-<!-- THESIS: the product leads. The live settlement console is the hero's chrome, not a screenshot of one, and the page argues only what the console proves. OWN-WORLD: pure-white canvas with one soft sky wash behind the hero, near-black ink (#171717), black as the only fill, inline link blue (#0d74ce) for body links, Inter for text, JetBrains Mono for every code and figure surface, hairline dividers instead of stacked cards, dark inverted panels reserved for data. STORY: a reviewer reads one headline, sees transfers arriving in real operator lanes, then reads the four steps, the API, and the recovery proof. FIRST VIEWPORT: nav, headline with the sky wash, one black CTA, and the top edge of the live console. FORM: pinned to the Expo analysis (DESIGN-expo.md), adapted so the hero artifact is the running console. FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md. -->
-<nav class="nav" aria-label="Primary">
-<div class="nav-in">
-<a class="wordmark" href="#top">
-<svg width="26" height="26" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#000"/><path d="M10 9h12M10 16h12M10 23h8" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>
-SettleLedger
-</a>
-<div class="nav-links">
-<a href="#console">Live traffic</a>
-<a href="#settlement">Settlement</a>
-<a href="#flow">How it settles</a>
-<a href="#drills">Drills</a>
+<!-- THESIS: a clearing-house folio, not a storefront. Ruled tables, folio stamps and running totals carry the page; the money is the display type and states arrive as stamps. Refuses both the SaaS marketing anatomy (no nav-pricing, no CTA band, no card grids) and the generic dark console. OWN-WORLD: warm paper, ink-black ruling with single/double rules doing all hierarchy, tabular JetBrains Mono figures, stamps for state (bordered, letterspaced, never pills), operator monograms instead of hue coding, radius capped at 4px. STORY: a reviewer reads the folio top to bottom — today's postings, the three operator columns, the settlement close with its exceptions, the measured bench, the drills — and can verify every figure against a committed log. FIRST VIEWPORT: masthead nameplate with dateline, running totals as display numerals, then the day's postings tape. FORM: clearing-house ledger folio with a signal-box block instrument fused for the partition drill (user direction over dealt index, fitness grounds recorded). FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md. -->
+<div class="folio">
+<header class="masthead">
+<div class="plate">
+<h1>SETTLE<span style="font-weight:400">LEDGER</span></h1>
+<span class="stamp live" id="modeStamp">Live</span>
 </div>
-<a class="btn btn-sm" href="https://github.com/Realms4239/secure-ledger#5-minute-demo-windows" target="_blank" rel="noreferrer">Run the demo</a>
+<div class="dateline">
+<span id="dateline">Folio — settlement day</span>
+<span class="folio-no" id="foliono">Nº —</span>
 </div>
-</nav>
-
-<header class="hero" id="top">
-<h1>Cross-operator settlement that survives its own crashes.</h1>
-<p>A Go gateway authenticates every transfer and hands it to a Rust engine that replays an append-only log, matches operator settlement files, and proves recovery after a kill-9. Simulated MVola, Orange and Airtel traffic.</p>
-<div class="cta-row">
-<button class="btn" id="heroPause" type="button">Pause live view</button>
-<a class="btn btn-secondary" href="https://github.com/Realms4239/secure-ledger" target="_blank" rel="noreferrer">Read the source</a>
-<span class="pill" id="modePill"><span class="dot idle" id="modeDot"></span><span id="modeText">checking</span></span>
-</div>
+<p class="dek" style="font-size:15px;max-width:64ch;margin:14px 0 0">Cross-operator settlement, reconciled in the open. A Go gateway authenticates every transfer; a Rust engine replays its log, matches the operator files, and proves recovery after a kill-9. Simulated MVola, Orange and Airtel traffic.</p>
 </header>
-<p id="demobanner" hidden>Recorded snapshot from 2026-10-01. Live traffic, lookup and drills need the local backend. <a href="https://github.com/Realms4239/secure-ledger#5-minute-demo-windows" target="_blank" rel="noreferrer">Run the demo locally</a>.</p>
+<p id="demobanner" hidden>Recorded folio of 2026-10-01. Live postings, lookup and drills need the local backend. <a href="https://github.com/Realms4239/secure-ledger#5-minute-demo-windows" target="_blank" rel="noreferrer">Run the demo locally</a>.</p>
 
-<section class="console" id="console" aria-label="Live settlement console">
-<div class="console-bar">
-<h2>Settlement console</h2>
-<div class="grow">
-<span class="count" id="edgecount">0 requests shown</span>
-<button class="btn btn-secondary btn-sm" id="pauseBtn" type="button" aria-pressed="false">Pause</button>
+<section aria-label="Running totals">
+<div class="totals" role="group">
+<div><b id="n-accepted">0</b><span>accepted</span></div>
+<div><b id="n-held">0</b><span>held for review</span></div>
+<div><b id="n-dup">0</b><span>retries answered</span></div>
+<div><b id="n-limited">0</b><span>rate limited</span></div>
 </div>
-</div>
-<div class="console-body">
-<div class="edge" id="edge" aria-label="Edge intake"></div>
+</section>
+
+<section class="rule-sec" id="flow" aria-label="Today's postings">
+<h2>Today's postings</h2>
+<p class="standfirst">Every request at the edge, typed as it lands. <button id="pauseBtn" type="button" aria-pressed="false" style="height:30px;font-size:12.5px">Pause the tape</button> <span class="muted" id="edgecount" style="margin-left:8px">0 shown</span></p>
+<div class="ledger scroll" style="max-height:220px"><div id="edge"></div></div>
+</section>
+
+<section class="rule-sec" aria-label="Operator columns">
+<h2>By operator</h2>
+<p class="standfirst">Each column closes with its own count and sum, like a sub-ledger.</p>
 <div class="lanes" role="list">
 <div class="lane" data-op="mvola" role="listitem">
-<div class="lane-head"><h3>MVola</h3><span class="n" data-count>0</span></div>
+<div class="lane-head"><span class="monogram">MV</span><h3>MVola</h3><span class="n" data-count>0 postings</span></div>
 <div class="meter"><div class="meter-fill" data-meter></div></div>
-<div class="lane-body" data-body></div>
+<div class="lane-body scroll" data-body style="max-height:200px"></div>
 <div class="lane-foot"><span data-sum>0 minor units</span><span data-live>0 in view</span></div>
 </div>
 <div class="lane" data-op="orange" role="listitem">
-<div class="lane-head"><h3>Orange</h3><span class="n" data-count>0</span></div>
+<div class="lane-head"><span class="monogram">OR</span><h3>Orange</h3><span class="n" data-count>0 postings</span></div>
 <div class="meter"><div class="meter-fill" data-meter></div></div>
-<div class="lane-body" data-body></div>
+<div class="lane-body scroll" data-body style="max-height:200px"></div>
 <div class="lane-foot"><span data-sum>0 minor units</span><span data-live>0 in view</span></div>
 </div>
 <div class="lane" data-op="airtel" role="listitem">
-<div class="lane-head"><h3>Airtel</h3><span class="n" data-count>0</span></div>
+<div class="lane-head"><span class="monogram">AT</span><h3>Airtel</h3><span class="n" data-count>0</span></div>
 <div class="meter"><div class="meter-fill" data-meter></div></div>
-<div class="lane-body" data-body></div>
+<div class="lane-body scroll" data-body style="max-height:200px"></div>
 <div class="lane-foot"><span data-sum>0 minor units</span><span data-live>0 in view</span></div>
 </div>
 </div>
-</div>
 </section>
 
-<div class="band grid3" style="margin-top:48px">
-<div class="card hoverable">
-<h3 class="card-title">Nothing unauthenticated enters the ledger</h3>
-<p>Every transfer carries a signed token and an idempotency key. A retry returns the original saga instead of creating a second one; rejects and fraud holds never reach the engine at all.</p>
-</div>
-<div class="card hoverable">
-<h3 class="card-title">Deterministic replay, not hopeful recovery</h3>
-<p>The engine persists every transition to a write-ahead log and tracks its position in the event stream. Restart after a hard kill and the same sagas come back, byte for byte, proven by a scripted drill.</p>
-</div>
-<div class="card hoverable">
-<h3 class="card-title">Measured, never asserted</h3>
-<p>Latency and match rates are committed run logs with the hardware they came from. The RUSTGO performance bar is unclaimed until a run supports it, and the page says which is which.</p>
-</div>
-</div>
-
-<section class="band" id="settlement" style="margin-top:64px">
-<div class="band-head">
-<h2>Settlement decisions, itemized</h2>
-<p>The engine matches every operator row back to the transfer that created it: exact amount, small fee tolerance, and every exception it cannot explain. Each figure below comes from the live report.</p>
-</div>
-<div class="grid2">
-<div class="card">
-<div class="card" style="border:none;padding:0">
-<h3 class="card-title">Exceptions waiting for a human</h3>
-<p class="muted">Missing rows link straight to the transfer that produced them.</p>
-</div>
-<div class="disc">
-<div><h3>Missing</h3><ul id="l-missing"><li class="muted">none</li></ul></div>
-<div><h3>Orphan</h3><ul id="l-orphan"><li class="muted">none</li></ul></div>
-<div><h3>Mismatch</h3><ul id="l-mismatch"><li class="muted">none</li></ul></div>
-</div>
+<section class="rule-sec" id="settlement" aria-label="Settlement close">
+<h2>The close</h2>
+<p class="standfirst">Each operator row joined to the transfer that created it. Figures below come from the live report; the double rule means agreed.</p>
+<div class="cols2">
+<div>
+<table class="folio" id="summary" aria-label="Match totals">
+<caption>Match totals</caption>
+<tr><th scope="row">Settled exact</th><td class="num" id="c-settled">–</td></tr>
+<tr><th scope="row">Settled within fee tolerance</th><td class="num" id="c-tolerated">–</td></tr>
+<tr><th scope="row">Missing: transfer with no row</th><td class="num" id="c-missing">–</td></tr>
+<tr><th scope="row">Orphan: row with no transfer</th><td class="num" id="c-orphan">–</td></tr>
+<tr><th scope="row">Mismatch: amounts disagree</th><td class="num" id="c-mismatch">–</td></tr>
+<tr><th scope="row">Corrupt rows skipped</th><td class="num" id="c-corrupt">–</td></tr>
+<tr class="total"><td>Decided rows</td><td class="num" id="c-decided">–</td></tr>
+</table>
 <details><summary>Raw report</summary><pre class="light" id="report">No settlement processed yet.</pre></details>
 </div>
-<div class="card dark">
-<h3 class="card-title">Measured performance</h3>
-<div id="benchbars"><p class="muted">Loading</p></div>
-<pre id="benchmeta" class="light" style="background:transparent;border:none;padding:12px 0 0;color:#b0b4ba">—</pre>
+<div>
+<h3 style="font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--body);margin-bottom:8px">Exceptions awaiting a human</h3>
+<p class="muted" style="margin-top:0">Missing rows open the transfer that produced them.</p>
+<div class="disc" style="grid-template-columns:1fr">
+<div><h3>Missing</h3><ul class="ruled" id="l-missing"><li class="muted">none</li></ul></div>
+<div><h3>Orphan</h3><ul class="ruled" id="l-orphan"><li class="muted">none</li></ul></div>
+<div><h3>Mismatch</h3><ul class="ruled" id="l-mismatch"><li class="muted">none</li></ul></div>
+</div>
 </div>
 </div>
 </section>
 
-<section class="band" id="flow" style="margin-top:64px">
-<div class="band-head">
-<h2>How a transfer settles</h2>
-<p>Four steps, each with a runnable check behind it.</p>
-</div>
-<div class="steps">
-<div class="step"><div class="step-plate">01</div><div><h3>Authenticate</h3><p>JWT plus idempotency key, rate limited per client, body and amount bounded.</p></div></div>
-<div class="step"><div class="step-plate">02</div><div><h3>Apply rules</h3><p>Velocity, new-account amount limits and cross-operator impossible hops hold traffic for review.</p></div></div>
-<div class="step"><div class="step-plate">03</div><div><h3>Log the saga</h3><p>The engine appends each transition to the write-ahead log before it is observable.</p></div></div>
-<div class="step"><div class="step-plate">04</div><div><h3>Match settlement</h3><p>Operator rows join to sagas by transaction id; exceptions queue with reasons.</p></div></div>
-</div>
-<pre style="margin-top:24px"><span class="c"># one transfer in, one saga out; the same key replays to the same saga</span>
-<span class="k">$</span> curl -X POST localhost:8080/transfers \
-    -H <span class="s">"Authorization: Bearer $JWT"</span> \
-    -H <span class="s">"Idempotency-Key: 00000000-0000-4000-8000-000000000001"</span> \
-    -d <span class="s">'{"from_account":"alice","to_account":"bob","amount":4200,"operator":"airtel","txid":"tx-1"}'</span>
-<span class="v">{"saga_id":"5a1c...","status":"accepted"}</span></pre>
+<section class="rule-sec" aria-label="Measured performance">
+<h2>Measured, never asserted</h2>
+<p class="standfirst">One recorded run, with the hardware it came from. The RUSTGO bar stays unclaimed until a run supports it.</p>
+<div id="benchbars"><p class="muted">Loading…</p></div>
+<pre id="benchmeta" class="light" style="border:none;padding:10px 0 0;color:var(--faint)">—</pre>
 </section>
 
-<section class="band" id="drills" style="margin-top:64px">
-<div class="band-head">
+<section class="rule-sec" aria-label="Inspect a transfer">
+<h2>Inspect</h2>
+<div class="row" style="display:flex;gap:10px;max-width:640px">
+<input id="sagaid" type="text" placeholder="saga id, or a txid from the missing list" aria-label="Saga id or txid" style="flex:1">
+<button id="lookupBtn" type="button">Open entry</button>
+</div>
+<pre id="saga">Nothing open.</pre>
+<pre id="gw" style="margin-top:10px">Gateway counters idle.</pre>
+<button id="gwBtn" type="button" class="secondary" style="margin-top:10px" aria-pressed="false">Show gateway counters</button>
+</section>
+
+<section class="rule-sec" id="drills" aria-label="Drills">
 <h2>Break it on purpose</h2>
-<p>The drills exist because recovery claims without evidence are marketing.</p>
+<p class="standfirst">Recovery claims without evidence are marketing. The partition drill holds the engine's offsets exactly like a network outage; releasing replays the backlog. The kill-9 drill is scripted and fails on one differing byte.</p>
+<div class="block" id="blockbox" role="status" aria-label="Partition state">
+<span class="lamp" aria-hidden="true"></span>
+<div><b id="blockstate">Line clear</b><br><span id="blocknote">Intake flowing. Holding traffic occupies the block.</span></div>
 </div>
-<div class="grid2">
-<div class="card">
-<h3 class="card-title">Inspect a transfer</h3>
-<p class="muted">Paste an id from the exception lists, or any saga id from the audit log.</p>
-<label class="field" for="sagaid">Saga id or transaction id</label>
-<input id="sagaid" type="text" placeholder="00000000-0000-4000-8000-000000000001">
-<div style="display:flex;gap:10px;margin-top:12px">
-<button class="btn btn-sm" id="lookupBtn" type="button">Open</button>
-<button class="btn btn-secondary btn-sm" id="gwBtn" type="button" aria-pressed="false">Gateway counters</button>
+<label class="field" for="chaostoken">Operator token (mint with <code>loader -token alice</code>)</label>
+<div class="row" style="display:flex;gap:10px;max-width:640px">
+<input id="chaostoken" type="text" placeholder="operator JWT" aria-label="Operator JWT" style="flex:1">
 </div>
-<pre style="margin-top:16px" id="saga">Nothing open yet.</pre>
-<pre style="margin-top:10px" id="gw">Gateway counters idle.</pre>
+<div class="btnrow">
+<button id="ponBtn" type="button">Occupy the block</button>
+<button id="poffBtn" type="button" class="secondary">Release the block</button>
+<button id="killBtn" type="button" class="secondary">How to run the kill-9 drill</button>
 </div>
-<div class="card">
-<h3 class="card-title">Partition and recovery</h3>
-<p class="muted">Holding traffic pauses the engine's intake exactly like a network partition, and releasing it replays the backlog. The kill-9 drill is scripted so it fails loudly.</p>
-<label class="field" for="chaostoken">Operator token</label>
-<input id="chaostoken" type="text" placeholder="mint with: loader -token alice">
-<div style="display:flex;gap:10px;margin-top:12px">
-<button class="btn btn-sm" id="ponBtn" type="button">Hold traffic</button>
-<button class="btn btn-secondary btn-sm" id="poffBtn" type="button">Release</button>
-</div>
-<button class="btn btn-secondary btn-sm" id="killBtn" type="button" style="margin-top:16px">How to run the kill-9 drill</button>
-<p class="muted" id="killnote" hidden>Stop the engine process (kill -9), start it again with the same environment, then compare the settlement report before and after. <code>scripts/recovery.ps1</code> runs it and fails if one byte differs.</p>
-</div>
-</div>
+<p id="killnote" class="muted" hidden>Stop the engine process (kill -9 / Stop-Process -Force), start it again with the same environment, then compare the settlement report before and after. <code>scripts/recovery.ps1</code> runs it and fails if one byte differs.</p>
 </section>
 
-<section class="cta-band">
-<h2>Run it before you read about it</h2>
-<p>Five minutes on one machine: seed ten thousand transfers, load them through the gateway, upload the settlement file, and watch the report match the expected counts exactly.</p>
-<a class="btn" href="https://github.com/Realms4239/secure-ledger#5-minute-demo-windows" target="_blank" rel="noreferrer">Open the demo script</a>
-</section>
-
-<footer class="footer">
-<div class="footer-in">
-<div>
-<h3>SettleLedger</h3>
-<p class="muted">An experimental settlement reconciliation prototype. Not audited, not for real money, and honest about both.</p>
-</div>
-<div>
-<h3>Repository</h3>
-<ul>
-<li><a href="https://github.com/Realms4239/secure-ledger" target="_blank" rel="noreferrer">Source</a></li>
-<li><a href="https://github.com/Realms4239/secure-ledger/blob/main/docs/architecture.md" target="_blank" rel="noreferrer">Architecture</a></li>
-<li><a href="https://github.com/Realms4239/secure-ledger/blob/main/docs/integration.md" target="_blank" rel="noreferrer">Integration</a></li>
-</ul>
-</div>
-<div>
-<h3>Project</h3>
-<ul>
-<li><a href="https://github.com/Realms4239/secure-ledger/blob/main/docs/limitations.md" target="_blank" rel="noreferrer">Limitations</a></li>
-<li><a href="https://github.com/Realms4239/secure-ledger/blob/main/SECURITY.md" target="_blank" rel="noreferrer">Security</a></li>
-<li><a href="https://github.com/Realms4239/secure-ledger/blob/main/CONTRIBUTING.md" target="_blank" rel="noreferrer">Contributing</a></li>
-</ul>
-</div>
-</div>
+<footer class="colophon">
+<span>SettleLedger is an experimental settlement prototype. <a href="https://github.com/Realms4239/secure-ledger">Source</a> · <a href="https://github.com/Realms4239/secure-ledger/blob/main/docs/limitations.md">Limitations</a></span>
+<span>Set in Inter and JetBrains Mono. Every figure measured or labeled.</span>
 </footer>
+</div>
 
 <script>
-// DEMO mode: GitHub Pages has no live backend, so the page reads the bundled
-// recorded snapshot and labels itself. Every other path is the real thing.
+// DEMO mode: GitHub Pages has no live backend, so the folio reads the bundled
+// recorded snapshot and stamps itself accordingly. Everything else is live.
 const DEMO = /\.github\.io$/.test(location.hostname);
 const edge = document.getElementById('edge');
 let edgeSeen = 0, paused = false, source = null;
@@ -383,95 +301,118 @@ document.querySelectorAll('.lane').forEach(l => {
     live: l.querySelector('[data-live]'), n: 0, total: 0
   };
 });
+const totals = {
+  accepted: document.getElementById('n-accepted'), held: document.getElementById('n-held'),
+  dup: document.getElementById('n-dup'), limited: document.getElementById('n-limited')
+};
+const counters = {accepted:0, held:0, dup:0, limited:0};
 const num = new Intl.NumberFormat('en-US');
 const money = n => num.format(Math.round(n));
 const setText = (id, s) => { document.getElementById(id).textContent = s; };
-function setMode(text, live){
-  setText('modeText', text);
-  document.getElementById('modeDot').className = 'dot' + (live ? '' : ' idle');
+function stampLive(live){
+  const st = document.getElementById('modeStamp');
+  st.textContent = live ? 'Live' : 'Recorded';
+  st.className = 'stamp ' + (live ? 'live' : 'recorded');
 }
-if(DEMO){ document.getElementById('demobanner').hidden = false; setMode('recorded snapshot', false); }
-
-function chip(cls, text, code, amount){
-  const el = document.createElement('span');
-  el.className = 'chip ' + cls;
-  if(code != null){
-    const c = document.createElement('code');
-    c.textContent = code;
-    el.appendChild(c);
+function folioLine(){
+  const d = new Date();
+  setText('dateline', 'Folio, ' + d.toLocaleDateString('en-GB', {day:'numeric', month:'long', year:'numeric'}));
+  setText('foliono', 'Nº ' + String(d.getFullYear()) + String(d.getMonth()+1).padStart(2,'0') + String(d.getDate()).padStart(2,'0'));
+}
+folioLine();
+function bump(key){
+  counters[key] += 1;
+  totals[key].textContent = num.format(counters[key]);
+}
+function posting(cls, stamp, code, amount){
+  const el = document.createElement('div');
+  el.className = 'rowline';
+  if(stamp){
+    const s = document.createElement('span');
+    s.className = 'st ' + cls;
+    s.textContent = stamp;
+    el.appendChild(s);
+  }
+  const c = document.createElement('code');
+  c.textContent = code || '';
+  el.appendChild(c);
+  if(amount != null){
     const a = document.createElement('span');
     a.className = 'amt';
     a.textContent = money(amount);
     el.appendChild(a);
-  } else {
-    el.textContent = text;
   }
   return el;
 }
 function push(el, host, cap){
   host.prepend(el);
   while(host.children.length > cap) host.lastChild.remove();
-}
-function row(code, amount){
-  const el = document.createElement('div');
-  el.className = 'lane-row';
-  const c = document.createElement('code');
-  c.textContent = code;
-  const a = document.createElement('span');
-  a.className = 'amt';
-  a.textContent = money(amount);
-  el.appendChild(c); el.appendChild(a);
-  return el;
+  if(host.id === 'edge'){
+    edgeSeen += 1;
+    setText('edgecount', num.format(edgeSeen) + ' shown');
+  }
 }
 function onEvent(raw){
   let o;
   try{ o = JSON.parse(raw); }catch(_){ return; }
   if(o.kind === 'accepted'){
-    push(chip('ok', null, o.txid, o.amount), edge, 40);
+    bump('accepted');
+    push(posting('ok', 'posted', o.txid, o.amount), edge, 40);
     const lane = lanes[(o.operator || '').toLowerCase()];
     if(lane){
       lane.n += 1; lane.total += o.amount;
-      push(row(o.txid, o.amount), lane.body, 18);
-      lane.count.textContent = num.format(lane.n);
+      push(posting('ok', null, o.txid, o.amount), lane.body, 24);
+      lane.count.textContent = num.format(lane.n) + ' postings';
       lane.sum.textContent = money(lane.total) + ' minor units';
       lane.live.textContent = num.format(lane.body.children.length) + ' in view';
       lane.meter.style.transform = 'scaleX(' + Math.min(1, lane.n) + ')';
     }
-    edgeSeen += 1;
-    setText('edgecount', num.format(edgeSeen) + ' requests shown');
-    if(!DEMO) setMode('live', true);
+    stampLive(true);
   } else if(o.kind === 'held_for_review'){
-    push(chip('warn', 'held for review: ' + (o.detail || 'rule')), edge, 40);
+    bump('held');
+    push(posting('warn', 'held', 'held: ' + (o.detail || 'rule')), edge, 40);
   } else if(o.kind === 'duplicate'){
-    push(chip('quiet', 'retry: ' + String(o.saga_id || o.detail || '').slice(0, 12)), edge, 40);
+    bump('dup');
+    push(posting('dim', 'retry', String(o.saga_id || o.detail || '').slice(0, 12)), edge, 40);
   } else if(o.kind === 'partition'){
-    push(chip(o.detail === 'on' ? 'bad' : 'quiet', 'partition ' + (o.detail || '')), edge, 40);
+    setBlock(o.detail === 'on');
+    push(posting(o.detail === 'on' ? 'bad' : 'dim', o.detail === 'on' ? 'held' : 'clear', 'partition ' + (o.detail || '')), edge, 40);
   } else if(o.kind === 'settlement_uploaded'){
-    push(chip('quiet', 'settlement file ' + (o.saga_id || '')), edge, 40);
+    push(posting('dim', 'filed', 'settlement ' + (o.saga_id || '')), edge, 40);
   } else if(o.kind === 'rate_limited'){
-    push(chip('bad', 'rate limited'), edge, 40);
+    bump('limited');
+    push(posting('bad', 'limited', 'rate limited'), edge, 40);
   }
+}
+function setBlock(occupied){
+  const box = document.getElementById('blockbox');
+  box.classList.toggle('occupied', occupied);
+  setText('blockstate', occupied ? 'Block occupied' : 'Line clear');
+  setText('blocknote', occupied
+    ? 'Traffic held at the gateway. Release to replay the backlog.'
+    : 'Intake flowing. Holding traffic occupies the block.');
 }
 function connect(){
   if(DEMO || paused) return;
   source = new EventSource('/events/stream');
   source.onmessage = e => onEvent(e.data);
-  source.onerror = () => { push(chip('bad', 'stream dropped, retrying'), edge, 40); setMode('reconnecting', false); };
+  source.onerror = () => { setBlock(false); stampLive(false); };
 }
-if(DEMO) push(chip('quiet', 'recorded snapshot: run the demo for live traffic'), edge, 40);
-else connect();
-function setPaused(next){
-  paused = next;
-  document.getElementById('pauseBtn').setAttribute('aria-pressed', String(paused));
-  setText('pauseBtn', paused ? 'Resume' : 'Pause');
-  setText('heroPause', paused ? 'Resume live view' : 'Pause live view');
+if(DEMO){
+  document.getElementById('demobanner').hidden = false;
+  stampLive(false);
+  const el = document.createElement('div');
+  el.className = 'empty-note';
+  el.textContent = 'Recorded folio: run the demo for live postings.';
+  edge.appendChild(el);
+} else connect();
+document.getElementById('pauseBtn').addEventListener('click', function(){
+  paused = !paused;
+  this.textContent = paused ? 'Resume the tape' : 'Pause the tape';
+  this.setAttribute('aria-pressed', String(paused));
   if(source){ source.close(); source = null; }
-  if(paused){ push(chip('quiet', 'view paused (intake continues)'), edge, 40); setMode('view paused', false); }
-  else connect();
-}
-document.getElementById('pauseBtn').addEventListener('click', () => setPaused(!paused));
-document.getElementById('heroPause').addEventListener('click', () => setPaused(!paused));
-
+  if(!paused) connect();
+});
 function fill(id, items, clickable){
   const ul = document.getElementById(id);
   ul.replaceChildren();
@@ -503,6 +444,13 @@ function renderReport(t){
   let o;
   try{ o = JSON.parse(t); }catch(_){ return; }
   const r = o.report || o;
+  const put = (id, v) => setText(id, v == null ? '–' : num.format(v));
+  put('c-settled', r.settled); put('c-tolerated', r.tolerated);
+  put('c-missing', (r.missing || []).length); put('c-orphan', (r.orphan || []).length);
+  put('c-mismatch', (r.mismatch || []).length); put('c-corrupt', r.csv_corrupt);
+  const decided = (r.settled || 0) + (r.tolerated || 0) + (r.missing || []).length
+    + (r.orphan || []).length + (r.mismatch || []).length;
+  setText('c-decided', num.format(decided));
   fill('l-missing', r.missing, true);
   fill('l-orphan', r.orphan, false);
   fill('l-mismatch', r.mismatch, false);
@@ -543,17 +491,10 @@ function fetchText(url, id, fallback){
   }).then(t => { setText(id, t); return t; })
     .catch(() => { setText(id, fallback); return null; });
 }
-function readMetrics(t){
-  t.split('\n').forEach(line => {
-    const [k, v] = line.split(' ');
-    if(k === 'accepted_total') setText('modeText', num.format(+v) + ' accepted');
-  });
-}
 function refresh(){
   fetchText(DEMO ? 'report.json' : '/report', 'report', 'No settlement processed yet.')
     .then(t => { if(t) renderReport(t); });
-  fetchText(DEMO ? 'metrics.txt' : '/metricsz', 'gw', 'Gateway unreachable.')
-    .then(t => { if(t) readMetrics(t); });
+  fetchText(DEMO ? 'metrics.txt' : '/metricsz', 'gw', 'Gateway unreachable.');
   fetch(DEMO ? 'bench.json' : '/bench-latest.json').then(r => r.text()).then(renderBench).catch(() => {});
 }
 function doLookup(){
@@ -576,8 +517,8 @@ function chaos(on){
     headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok},
     body: JSON.stringify({on})
   }).then(r => r.text())
-    .then(t => push(chip(on ? 'bad' : 'quiet', 'partition: ' + t), edge, 40))
-    .catch(() => push(chip('bad', 'partition switch failed'), edge, 40));
+    .then(() => setBlock(on))
+    .catch(() => {});
 }
 document.getElementById('ponBtn').addEventListener('click', () => chaos(true));
 document.getElementById('poffBtn').addEventListener('click', () => chaos(false));

@@ -8,10 +8,11 @@ Mode: Operate. Same routes and functions as the shipped dashboard
 (intake stream, saga lookup, match report, metrics, bench, chaos partition);
 this is a re-skin + copy de-slop, not a restructure.
 
-Pinned: the Expo analysis in `DESIGN-expo.md` — a pure-white canvas with a
-single soft sky wash behind the hero, near-black ink, black as the only fill,
-inline link blue for body links, Inter for text and JetBrains Mono for every
-code and figure surface. (Replaces the earlier deep-space console: the brief
-overrode that pin on 2026-10-02.) Modest scope: one page, no new endpoints,
-no new claims. Copy rule: plain words, no self-reference, no emoji, no
-purple prose. Every number shown is measured or labeled unmeasured.
+Pinned: a clearing-house ledger folio — ruled paper, folio stamps, running
+totals as display numerals, double-rule closings, one signal-box block
+instrument for the partition drill. (Replaces the Expo marketing world of
+2026-10-02: its nav/hero/cards/footer anatomy read as ecommerce boilerplate
+on an instrument. The dark console it replaced stays rejected as generic.)
+Modest scope: one page, no new endpoints, no new claims. Copy rule: plain
+words, ledger voice, no emoji, no purple prose. Every number shown is
+measured or labeled unmeasured.
