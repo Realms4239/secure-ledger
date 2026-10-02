@@ -132,9 +132,6 @@ mod tests {
             r#"{"from":"alice","to":"bob","amount":100}"#
         );
         // LE timestamp check: bytes at 20..28 must be 00 00 2a 36 fe 9c 97 17
-        assert_eq!(
-            &slot[20..28],
-            &hex::decode("00002a36fe9c9717").unwrap()[..]
-        );
+        assert_eq!(&slot[20..28], &hex::decode("00002a36fe9c9717").unwrap()[..]);
     }
 }

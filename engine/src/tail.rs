@@ -172,7 +172,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let ev = dir.join("events.log");
         let off = dir.join("events.offset");
-        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(&ev).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&ev)
+            .unwrap();
         writeln!(f, r#"{{"t":1,"id":"550e8400-e29b-41d4-a716-446655440000","ts":1700000000000000000,"p":"{{\"from\":\"alice\"}}"}}"#).unwrap();
         drop(f);
         let mut tail = FileTailer::open(ev.clone(), off.clone()).unwrap();
@@ -198,7 +202,11 @@ mod tests {
 
     fn append(ev: &std::path::Path, s: &str) {
         use std::io::Write;
-        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(ev).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(ev)
+            .unwrap();
         f.write_all(s.as_bytes()).unwrap();
     }
 
@@ -217,7 +225,10 @@ mod tests {
     fn torn_write_retries_partial_line() {
         let (ev, off) = setup("torn");
         // Crash mid-append: partial line, no newline — must NOT consume.
-        append(&ev, r#"{"t":1,"id":"550e8400-e29b-41d4-a716-446655440000","ts":1,"p":"{"#);
+        append(
+            &ev,
+            r#"{"t":1,"id":"550e8400-e29b-41d4-a716-446655440000","ts":1,"p":"{"#,
+        );
         let mut tail = FileTailer::open(ev.clone(), off.clone()).unwrap();
         assert!(tail.next().unwrap().is_none(), "partial line must wait");
         // Writer completes the line — the full event parses exactly once.
@@ -232,7 +243,10 @@ mod tests {
     #[test]
     fn event_type_out_of_range_rejected() {
         let (ev, off) = setup("rangecheck");
-        append(&ev, "{\"t\":999,\"id\":\"550e8400-e29b-41d4-a716-446655440000\",\"ts\":1,\"p\":\"{}\"}\n");
+        append(
+            &ev,
+            "{\"t\":999,\"id\":\"550e8400-e29b-41d4-a716-446655440000\",\"ts\":1,\"p\":\"{}\"}\n",
+        );
         let mut tail = FileTailer::open(ev, off).unwrap();
         match tail.next() {
             Err(TailError::CorruptLine(1)) => {}

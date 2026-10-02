@@ -28,7 +28,9 @@ pub fn verdict_of(s: &Saga) -> &'static str {
 }
 
 impl PgSink {
-    pub async fn connect(url: &str) -> Result<(Self, tokio::task::JoinHandle<()>), tokio_postgres::Error> {
+    pub async fn connect(
+        url: &str,
+    ) -> Result<(Self, tokio::task::JoinHandle<()>), tokio_postgres::Error> {
         let (client, connection) = tokio_postgres::connect(url, NoTls).await?;
         let handle = tokio::spawn(async move {
             if let Err(e) = connection.await {
@@ -107,7 +109,10 @@ mod tests {
         sink.upsert_saga(&s).await.expect("upsert");
         let row = sink
             .client
-            .query_one("SELECT verdict, amount FROM sagas WHERE saga_id='test-saga-1'", &[])
+            .query_one(
+                "SELECT verdict, amount FROM sagas WHERE saga_id='test-saga-1'",
+                &[],
+            )
             .await
             .expect("select");
         let verdict: String = row.get(0);

@@ -131,12 +131,12 @@ func TestTransferPipeline_Table(t *testing.T) {
 		},
 		{
 			name: "zero amount", token: validTok, key: uuid.NewString(),
-			body: `{"from_account":"alice","to_account":"bob","amount":0}`,
+			body:     `{"from_account":"alice","to_account":"bob","amount":0}`,
 			wantCode: http.StatusBadRequest, wantAudit: `"decision":"bad_request"`,
 		},
 		{
 			name: "negative amount", token: validTok, key: uuid.NewString(),
-			body: `{"from_account":"alice","to_account":"bob","amount":-5}`,
+			body:     `{"from_account":"alice","to_account":"bob","amount":-5}`,
 			wantCode: http.StatusBadRequest, wantAudit: `"decision":"bad_request"`,
 		},
 		{
@@ -219,7 +219,8 @@ func TestTransferPipeline_Table(t *testing.T) {
 	}
 }
 
-func TestTransferRejectsFractionalAmount(t *testing.T) {	d := setup(t)
+func TestTransferRejectsFractionalAmount(t *testing.T) {
+	d := setup(t)
 	tok := makeToken(t, []byte(testSecret), "alice", time.Now().Add(time.Hour))
 	rec := d.do(t, "POST", "/transfers", tok, uuid.NewString(), `{"from_account":"alice","to_account":"bob","amount":100.5}`)
 	if rec.Code != http.StatusBadRequest {

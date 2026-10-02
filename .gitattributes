@@ -1,0 +1,6 @@
+# Normalize line endings: LF in the repo on every platform. The Go and Rust
+# toolchains (gofmt, rustfmt, clippy) all expect LF; CRLF checkouts make
+# `gofmt -l` and `cargo fmt --check` fail spuriously on Windows.
+* text=auto eol=lf
+*.pdf binary
+*.png binary

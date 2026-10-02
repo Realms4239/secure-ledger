@@ -10,9 +10,9 @@ import (
 // short burst. Zero value is unusable — always New. Map growth is bounded by
 // periodic reset (see Allow).
 type Limiter struct {
-	mu     sync.Mutex
-	rps    float64
-	burst  float64
+	mu      sync.Mutex
+	rps     float64
+	burst   float64
 	buckets map[string]*bucket
 }
 

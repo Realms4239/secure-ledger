@@ -22,9 +22,9 @@ type Hub struct {
 
 // SSE tuning in one place: replay depth, per-client buffer, heartbeat.
 const (
-	hubReplayDepth  = 8
-	hubChanCap      = 16
-	heartbeatEvery  = 15 * time.Second
+	hubReplayDepth = 8
+	hubChanCap     = 16
+	heartbeatEvery = 15 * time.Second
 )
 
 func NewHub() *Hub { return &Hub{subs: make(map[chan string]struct{})} }

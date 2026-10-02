@@ -178,12 +178,16 @@ impl SagaStore {
     /// Apply a ring event. Returns Ok(true) if state changed, Ok(false) on
     /// duplicate (no new saga created). Every accepted transition is WAL'd
     /// with fsync before the caller observes success.
-    pub fn apply(&mut self, typ: u8, saga_id: &[u8; 16], payload: &[u8]) -> Result<bool, StoreError> {
+    pub fn apply(
+        &mut self,
+        typ: u8,
+        saga_id: &[u8; 16],
+        payload: &[u8],
+    ) -> Result<bool, StoreError> {
         let sid = saga_id_to_string(saga_id);
         match typ {
             TYPE_SAGA_START => {
-                let p: Payload = serde_json::from_slice(payload)
-                    .map_err(StoreError::WalJson)?;
+                let p: Payload = serde_json::from_slice(payload).map_err(StoreError::WalJson)?;
                 if let Some(existing) = self.dedup.get(&p.idempotency_key).cloned() {
                     // duplicate: no state change, no WAL write
                     self.duplicate_events_total += 1;
@@ -269,7 +273,10 @@ impl SagaStore {
                 self.wal.append(&entry)?;
                 Ok(true)
             }
-            other => Err(StoreError::BadTransition(format!("type_{other:x}"), SagaState::InProgress)),
+            other => Err(StoreError::BadTransition(
+                format!("type_{other:x}"),
+                SagaState::InProgress,
+            )),
         }
     }
 
@@ -299,7 +306,6 @@ impl SagaStore {
     pub fn is_empty(&self) -> bool {
         self.sagas.is_empty()
     }
-
 }
 
 fn state_str(s: SagaState) -> &'static str {
@@ -315,7 +321,10 @@ fn parse_state(s: &str) -> Result<SagaState, StoreError> {
         "in_progress" => Ok(SagaState::InProgress),
         "compensating" => Ok(SagaState::Compensating),
         "compensated" => Ok(SagaState::Compensated),
-        other => Err(StoreError::BadTransition(other.into(), SagaState::InProgress)),
+        other => Err(StoreError::BadTransition(
+            other.into(),
+            SagaState::InProgress,
+        )),
     }
 }
 
@@ -343,8 +352,12 @@ impl Wal {
                 if let Some(parent) = self.path.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                self.file
-                    .insert(std::fs::OpenOptions::new().create(true).append(true).open(&self.path)?)
+                self.file.insert(
+                    std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&self.path)?,
+                )
             }
         };
         let line = serde_json::to_string(entry)?;
@@ -419,11 +432,15 @@ mod tests {
         let wal_path = temp_wal("t2");
         let mut store = SagaStore::open(wal_path.clone()).unwrap().0;
         let sid = [7u8; 16];
-        store.apply(TYPE_SAGA_START, &sid, &payload("dup-key")).unwrap();
+        store
+            .apply(TYPE_SAGA_START, &sid, &payload("dup-key"))
+            .unwrap();
         // second event, different saga_id bytes but same idempotency key
         let mut sid2 = [7u8; 16];
         sid2[15] = 9;
-        let changed = store.apply(TYPE_SAGA_START, &sid2, &payload("dup-key")).unwrap();
+        let changed = store
+            .apply(TYPE_SAGA_START, &sid2, &payload("dup-key"))
+            .unwrap();
         assert!(!changed, "duplicate must not change state");
         assert_eq!(store.len(), 1, "no new saga on duplicate");
         assert_eq!(store.duplicate_events_total, 1);
@@ -436,7 +453,9 @@ mod tests {
         let wal_path = temp_wal("t3");
         let mut store = SagaStore::open(wal_path.clone()).unwrap().0;
         let sid = saga_id(3);
-        store.apply(TYPE_SAGA_START, &sid, &payload("key-c")).unwrap();
+        store
+            .apply(TYPE_SAGA_START, &sid, &payload("key-c"))
+            .unwrap();
         store.apply(TYPE_STEP_FAIL, &sid, b"").unwrap();
         let s = store.get(&saga_id_to_string(&sid)).unwrap();
         assert_eq!(s.state, SagaState::Compensating);
@@ -455,7 +474,9 @@ mod tests {
         let wal_path = temp_wal("t5");
         let mut store = SagaStore::open(wal_path.clone()).unwrap().0;
         let sid = saga_id(5);
-        store.apply(TYPE_SAGA_START, &sid, &payload("key-e")).unwrap();
+        store
+            .apply(TYPE_SAGA_START, &sid, &payload("key-e"))
+            .unwrap();
         for _ in 0..150 {
             store.apply(TYPE_STEP_OK, &sid, b"").unwrap();
         }
@@ -471,12 +492,19 @@ mod tests {
         let wal_path = temp_wal("t4");
         {
             let mut store = SagaStore::open(wal_path.clone()).unwrap().0;
-            store.apply(TYPE_SAGA_START, &saga_id(1), &payload("k1")).unwrap();
-            store.apply(TYPE_SAGA_START, &saga_id(2), &payload("k2")).unwrap();
+            store
+                .apply(TYPE_SAGA_START, &saga_id(1), &payload("k1"))
+                .unwrap();
+            store
+                .apply(TYPE_SAGA_START, &saga_id(2), &payload("k2"))
+                .unwrap();
             store.apply(TYPE_STEP_FAIL, &saga_id(1), b"").unwrap();
             // simulate crash mid-write: append garbage directly
             use std::io::Write;
-            let mut f = std::fs::OpenOptions::new().append(true).open(&wal_path).unwrap();
+            let mut f = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&wal_path)
+                .unwrap();
             f.write_all(b"{corrupted json line\n").unwrap();
         }
         let mut corrupt = 0u64;
@@ -493,6 +521,27 @@ mod tests {
         let s2 = store.get(&saga_id_to_string(&saga_id(2))).unwrap();
         assert_eq!(s2.state, SagaState::InProgress);
         drop(store);
+        let _ = std::fs::remove_file(wal_path);
+    }
+
+    #[test]
+    fn wal_middle_corruption_skipped_and_counted() {
+        let wal_path = temp_wal("t6");
+        {
+            let mut store = SagaStore::open(wal_path.clone()).unwrap().0;
+            store.apply(TYPE_SAGA_START, &saga_id(1), &payload("k1")).unwrap();
+            // Torn write in the middle: garbage between two valid entries.
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new().append(true).open(&wal_path).unwrap();
+            f.write_all(b"{torn mid-file\n").unwrap();
+            drop(f);
+            store.apply(TYPE_SAGA_START, &saga_id(2), &payload("k2")).unwrap();
+            drop(store);
+        }
+        let mut corrupt = 0u64;
+        let entries = Wal::open(wal_path.clone()).replay(&mut corrupt).unwrap();
+        assert_eq!(entries.len(), 2, "both valid entries survive");
+        assert_eq!(corrupt, 1, "middle garbage counted");
         let _ = std::fs::remove_file(wal_path);
     }
 }

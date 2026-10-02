@@ -61,7 +61,7 @@ type TransfersHandler struct {
 	hub           *dash.Hub
 	partitionFlag string
 
-	limiter   *ratelimit.Limiter
+	limiter    *ratelimit.Limiter
 	failInject bool
 
 	ringFullTotal     atomic.Int64
