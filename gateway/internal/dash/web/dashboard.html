@@ -483,7 +483,7 @@ function renderBench(t){
     line.appendChild(lbl); line.appendChild(track); line.appendChild(val);
     host.appendChild(line);
   });
-  setText('benchmeta', [o.date, o.hardware, o.rps + ' rps', o.match].filter(Boolean).join(' · '));
+  setText('benchmeta', [o.date, o.hardware, o.rps == null ? null : o.rps + ' rps', o.match].filter(Boolean).join(' · '));
 }
 function fetchText(url, id, fallback){
   return fetch(url).then(r => {
